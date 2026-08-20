@@ -102,7 +102,26 @@
 
         document.getElementById("secure").textContent =
             window.isSecureContext;
+        // Registrar el Service Worker del laboratorio.
+async function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) {
+        log("Service Worker no soportado");
+        return;
+    }
 
+    try {
+        const registration =
+            await navigator.serviceWorker.register("./sw.js");
+
+        log("Service Worker registrado");
+        log(`Scope: ${registration.scope}`);
+
+    } catch (error) {
+        log(`Error registrando SW: ${error}`);
+    }
+}
+
+registerServiceWorker();
         // Comprobar APIs que necesitaremos en fases posteriores.
         document.getElementById("sw").textContent =
             "serviceWorker" in navigator ? "Disponible" : "No disponible";
