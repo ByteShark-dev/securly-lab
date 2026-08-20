@@ -54,7 +54,7 @@
             color: #eeeeee;
             padding: 15px;
             border-radius: 8px;
-            min-height: 180px;
+            min-height: 220px;
             font-family: monospace;
         }
     </style>
@@ -66,7 +66,7 @@
 
     <p>
         Laboratorio para estudiar navegación, Service Workers,
-        filtrado web y transporte desde Chrome.
+        CORS y filtrado web desde Chrome.
     </p>
 
     <h2>Contexto del navegador</h2>
@@ -106,21 +106,24 @@
     <h2>Service Worker</h2>
 
     <div id="status">
-        Estado: <span id="sw-status">Comprobando...</span>
+        Estado:
+        <span id="sw-status">Comprobando...</span>
     </div>
 
     <button onclick="testServiceWorker()">
         Probar Service Worker
     </button>
 
-    <h2>Pruebas directas</h2>
+    <h2>Pruebas de red</h2>
 
-    <!-- Sitio permitido usado como control positivo. -->
+    <button onclick="testDirectFetch()">
+        Probar Fetch directo
+    </button>
+
     <button onclick="testExample()">
         Abrir Example.com
     </button>
 
-    <!-- Sitio bloqueado usado como target del laboratorio. -->
     <button onclick="testNeal()">
         Abrir Neal.fun
     </button>
@@ -135,34 +138,28 @@
 
     <script>
         /*
-         * ---------------------------------------------------------
+         * =========================================================
          * INFORMACIÓN DEL CONTEXTO
-         * ---------------------------------------------------------
+         * =========================================================
          */
 
-        // Mostrar el origin actual.
         document.getElementById("origin").textContent =
             location.origin;
 
-        // Mostrar el hostname y puerto si aplica.
         document.getElementById("host").textContent =
             location.host;
 
-        // Mostrar el protocolo actual.
         document.getElementById("protocol").textContent =
             location.protocol;
 
-        // Los Service Workers requieren un contexto seguro.
         document.getElementById("secure").textContent =
             window.isSecureContext ? "true" : "false";
 
-        // Comprobar soporte de Service Workers.
         document.getElementById("sw-support").textContent =
             "serviceWorker" in navigator
                 ? "Disponible"
                 : "No disponible";
 
-        // Comprobar soporte de WebSockets.
         document.getElementById("ws-support").textContent =
             "WebSocket" in window
                 ? "Disponible"
@@ -170,9 +167,9 @@
 
 
         /*
-         * ---------------------------------------------------------
+         * =========================================================
          * LOG DEL LABORATORIO
-         * ---------------------------------------------------------
+         * =========================================================
          */
 
         function log(message) {
@@ -191,14 +188,12 @@
 
 
         /*
-         * ---------------------------------------------------------
+         * =========================================================
          * SERVICE WORKER
-         * ---------------------------------------------------------
+         * =========================================================
          */
 
         async function registerServiceWorker() {
-
-            // Salir si Chrome no soporta Service Workers.
             if (!("serviceWorker" in navigator)) {
                 document.getElementById("sw-status").textContent =
                     "No soportado";
@@ -209,32 +204,19 @@
             }
 
             try {
-
-                /*
-                 * Registrar sw.js.
-                 *
-                 * Como index.html y sw.js están en la misma carpeta,
-                 * "./sw.js" es suficiente.
-                 */
+                // Registrar sw.js ubicado en la misma carpeta.
                 const registration =
                     await navigator.serviceWorker.register("./sw.js");
 
                 log("Service Worker registrado.");
+                log(`Scope: ${registration.scope}`);
 
-                log(
-                    `Scope: ${registration.scope}`
-                );
-
-                /*
-                 * Esperar hasta que exista un Service Worker
-                 * activo y listo.
-                 */
+                // Esperar hasta que haya un Service Worker activo.
                 await navigator.serviceWorker.ready;
 
                 updateServiceWorkerStatus();
 
             } catch (error) {
-
                 document.getElementById("sw-status").textContent =
                     "Error";
 
@@ -246,102 +228,135 @@
 
 
         function updateServiceWorkerStatus() {
-
-            /*
-             * navigator.serviceWorker.controller indica si
-             * ESTA pestaña ya está siendo controlada por el SW.
-             */
             if (navigator.serviceWorker.controller) {
-
                 document.getElementById("sw-status").textContent =
                     "Activo y controlando esta página";
 
                 log(
                     "El Service Worker está controlando esta página."
                 );
-
             } else {
-
                 document.getElementById("sw-status").textContent =
-                    "Registrado, pero esta pestaña aún no está controlada";
+                    "Registrado, recarga la página";
 
                 log(
-                    "Service Worker registrado. Recarga la página una vez."
+                    "Service Worker registrado, pero esta pestaña todavía no está controlada."
                 );
             }
         }
 
 
-        /*
-         * Detectar cuando un nuevo Service Worker empieza
-         * a controlar la página.
-         */
-        navigator.serviceWorker?.addEventListener(
-            "controllerchange",
-            () => {
-
-                log(
-                    "Cambio de controlador detectado."
-                );
-
-                updateServiceWorkerStatus();
-            }
-        );
+        // Detectar cuando el Service Worker toma control.
+        if ("serviceWorker" in navigator) {
+            navigator.serviceWorker.addEventListener(
+                "controllerchange",
+                () => {
+                    log("Cambio de controlador detectado.");
+                    updateServiceWorkerStatus();
+                }
+            );
+        }
 
 
         /*
-         * ---------------------------------------------------------
-         * PRUEBA DEL ENDPOINT VIRTUAL
-         * ---------------------------------------------------------
+         * =========================================================
+         * PRUEBA DEL SERVICE WORKER
+         * =========================================================
          */
 
         async function testServiceWorker() {
-
             log("Solicitando ./lab-message");
 
             try {
-
                 /*
-                 * Este archivo NO existe realmente en GitHub.
-                 *
-                 * sw.js debería interceptar esta petición
-                 * y fabricar la respuesta.
+                 * Este recurso no existe físicamente en GitHub.
+                 * sw.js debería interceptarlo y generar la respuesta.
                  */
                 const response =
                     await fetch("./lab-message");
 
-                log(
-                    `HTTP status: ${response.status}`
-                );
+                log(`HTTP status: ${response.status}`);
 
                 const data =
                     await response.json();
 
-                log(
-                    "Respuesta recibida:"
-                );
+                log("Respuesta recibida:");
 
                 log(
                     JSON.stringify(data, null, 2)
                 );
 
             } catch (error) {
-
                 log(
-                    `ERROR: ${error.message}`
+                    `Service Worker ERROR: ${error.message}`
                 );
             }
         }
 
 
         /*
-         * ---------------------------------------------------------
+         * =========================================================
+         * PRUEBA DE FETCH CROSS-ORIGIN
+         * =========================================================
+         */
+
+        async function testDirectFetch() {
+            log(
+                "Intentando fetch directo hacia https://example.com/ ..."
+            );
+
+            try {
+                /*
+                 * La página actual pertenece a:
+                 * https://byteshark-dev.github.io
+                 *
+                 * example.com pertenece a otro origin.
+                 *
+                 * Esta prueba nos ayuda a observar la restricción
+                 * de CORS desde una página web normal.
+                 */
+                const response =
+                    await fetch("https://example.com/");
+
+                log(
+                    `HTTP status: ${response.status}`
+                );
+
+                const text =
+                    await response.text();
+
+                log(
+                    `Respuesta leída correctamente: ${text.length} caracteres`
+                );
+
+                // Mostrar solamente una pequeña parte del HTML.
+                log("Primeros 250 caracteres:");
+
+                log(
+                    text.substring(0, 250)
+                );
+
+            } catch (error) {
+                log("Fetch directo falló.");
+
+                log(
+                    `Tipo: ${error.name}`
+                );
+
+                log(
+                    `Mensaje: ${error.message}`
+                );
+            }
+        }
+
+
+        /*
+         * =========================================================
          * CONTROLES DE NAVEGACIÓN
-         * ---------------------------------------------------------
+         * =========================================================
          */
 
         function testExample() {
-
             log(
                 "Navegación directa hacia example.com"
             );
@@ -352,7 +367,6 @@
 
 
         function testNeal() {
-
             log(
                 "Navegación directa hacia neal.fun"
             );
@@ -363,9 +377,9 @@
 
 
         /*
-         * ---------------------------------------------------------
+         * =========================================================
          * INICIO
-         * ---------------------------------------------------------
+         * =========================================================
          */
 
         log("Web Filtering Lab iniciado.");
