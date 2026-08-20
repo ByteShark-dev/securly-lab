@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
 
-    <!-- Necesario para que se vea correctamente en Chromebook/móvil. -->
+    <!-- Ajuste correcto para Chromebook, móvil y pantallas pequeñas. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
     <title>Web Filtering Lab</title>
@@ -11,30 +11,51 @@
     <style>
         body {
             font-family: system-ui, sans-serif;
-            max-width: 800px;
+            max-width: 850px;
             margin: 40px auto;
             padding: 0 20px;
+            line-height: 1.5;
+        }
+
+        h1,
+        h2 {
+            margin-bottom: 10px;
+        }
+
+        .info {
+            margin-bottom: 25px;
         }
 
         .value {
             font-family: monospace;
-            background: #eee;
+            background: #eeeeee;
             padding: 4px 8px;
             border-radius: 5px;
+            word-break: break-all;
         }
 
         button {
-            margin: 5px;
+            margin: 5px 5px 5px 0;
             padding: 10px 16px;
+            cursor: pointer;
+        }
+
+        #status {
+            padding: 10px;
+            background: #eeeeee;
+            border-radius: 8px;
+            margin-bottom: 20px;
         }
 
         #log {
             white-space: pre-wrap;
-            background: #111;
-            color: #eee;
+            overflow-wrap: anywhere;
+            background: #111111;
+            color: #eeeeee;
             padding: 15px;
             border-radius: 8px;
-            min-height: 150px;
+            min-height: 180px;
+            font-family: monospace;
         }
     </style>
 </head>
@@ -44,109 +65,313 @@
     <h1>Web Filtering Lab</h1>
 
     <p>
-        Origin:
-        <span id="origin" class="value"></span>
+        Laboratorio para estudiar navegación, Service Workers,
+        filtrado web y transporte desde Chrome.
     </p>
 
-    <p>
-        Host:
-        <span id="host" class="value"></span>
-    </p>
+    <h2>Contexto del navegador</h2>
 
-    <p>
-        Protocol:
-        <span id="protocol" class="value"></span>
-    </p>
+    <div class="info">
+        <p>
+            Origin:
+            <span id="origin" class="value">Cargando...</span>
+        </p>
 
-    <p>
-        Secure Context:
-        <span id="secure" class="value"></span>
-    </p>
+        <p>
+            Host:
+            <span id="host" class="value">Cargando...</span>
+        </p>
 
-    <p>
-        Service Workers:
-        <span id="sw" class="value"></span>
-    </p>
+        <p>
+            Protocol:
+            <span id="protocol" class="value">Cargando...</span>
+        </p>
 
-    <p>
-        WebSockets:
-        <span id="ws" class="value"></span>
-    </p>
+        <p>
+            Secure Context:
+            <span id="secure" class="value">Cargando...</span>
+        </p>
 
-    <h2>Pruebas</h2>
+        <p>
+            Service Workers:
+            <span id="sw-support" class="value">Cargando...</span>
+        </p>
 
-    <!-- Navegación completamente normal. -->
+        <p>
+            WebSockets:
+            <span id="ws-support" class="value">Cargando...</span>
+        </p>
+    </div>
+
+    <h2>Service Worker</h2>
+
+    <div id="status">
+        Estado: <span id="sw-status">Comprobando...</span>
+    </div>
+
+    <button onclick="testServiceWorker()">
+        Probar Service Worker
+    </button>
+
+    <h2>Pruebas directas</h2>
+
+    <!-- Sitio permitido usado como control positivo. -->
     <button onclick="testExample()">
         Abrir Example.com
     </button>
 
-    <!-- Sigue siendo una navegación directa normal. -->
+    <!-- Sitio bloqueado usado como target del laboratorio. -->
     <button onclick="testNeal()">
         Abrir Neal.fun
     </button>
 
     <h2>Log</h2>
 
+    <button onclick="clearLog()">
+        Limpiar log
+    </button>
+
     <div id="log"></div>
 
     <script>
-        // Mostrar información del contexto actual del navegador.
+        /*
+         * ---------------------------------------------------------
+         * INFORMACIÓN DEL CONTEXTO
+         * ---------------------------------------------------------
+         */
+
+        // Mostrar el origin actual.
         document.getElementById("origin").textContent =
             location.origin;
 
+        // Mostrar el hostname y puerto si aplica.
         document.getElementById("host").textContent =
             location.host;
 
+        // Mostrar el protocolo actual.
         document.getElementById("protocol").textContent =
             location.protocol;
 
+        // Los Service Workers requieren un contexto seguro.
         document.getElementById("secure").textContent =
-            window.isSecureContext;
-        // Registrar el Service Worker del laboratorio.
-async function registerServiceWorker() {
-    if (!("serviceWorker" in navigator)) {
-        log("Service Worker no soportado");
-        return;
-    }
+            window.isSecureContext ? "true" : "false";
 
-    try {
-        const registration =
-            await navigator.serviceWorker.register("./sw.js");
+        // Comprobar soporte de Service Workers.
+        document.getElementById("sw-support").textContent =
+            "serviceWorker" in navigator
+                ? "Disponible"
+                : "No disponible";
 
-        log("Service Worker registrado");
-        log(`Scope: ${registration.scope}`);
+        // Comprobar soporte de WebSockets.
+        document.getElementById("ws-support").textContent =
+            "WebSocket" in window
+                ? "Disponible"
+                : "No disponible";
 
-    } catch (error) {
-        log(`Error registrando SW: ${error}`);
-    }
-}
 
-registerServiceWorker();
-        // Comprobar APIs que necesitaremos en fases posteriores.
-        document.getElementById("sw").textContent =
-            "serviceWorker" in navigator ? "Disponible" : "No disponible";
-
-        document.getElementById("ws").textContent =
-            "WebSocket" in window ? "Disponible" : "No disponible";
+        /*
+         * ---------------------------------------------------------
+         * LOG DEL LABORATORIO
+         * ---------------------------------------------------------
+         */
 
         function log(message) {
             const output = document.getElementById("log");
 
+            const time =
+                new Date().toLocaleTimeString();
+
             output.textContent +=
-                `[${new Date().toLocaleTimeString()}] ${message}\n`;
+                `[${time}] ${message}\n`;
         }
+
+        function clearLog() {
+            document.getElementById("log").textContent = "";
+        }
+
+
+        /*
+         * ---------------------------------------------------------
+         * SERVICE WORKER
+         * ---------------------------------------------------------
+         */
+
+        async function registerServiceWorker() {
+
+            // Salir si Chrome no soporta Service Workers.
+            if (!("serviceWorker" in navigator)) {
+                document.getElementById("sw-status").textContent =
+                    "No soportado";
+
+                log("Service Worker no soportado.");
+
+                return;
+            }
+
+            try {
+
+                /*
+                 * Registrar sw.js.
+                 *
+                 * Como index.html y sw.js están en la misma carpeta,
+                 * "./sw.js" es suficiente.
+                 */
+                const registration =
+                    await navigator.serviceWorker.register("./sw.js");
+
+                log("Service Worker registrado.");
+
+                log(
+                    `Scope: ${registration.scope}`
+                );
+
+                /*
+                 * Esperar hasta que exista un Service Worker
+                 * activo y listo.
+                 */
+                await navigator.serviceWorker.ready;
+
+                updateServiceWorkerStatus();
+
+            } catch (error) {
+
+                document.getElementById("sw-status").textContent =
+                    "Error";
+
+                log(
+                    `Error registrando Service Worker: ${error.message}`
+                );
+            }
+        }
+
+
+        function updateServiceWorkerStatus() {
+
+            /*
+             * navigator.serviceWorker.controller indica si
+             * ESTA pestaña ya está siendo controlada por el SW.
+             */
+            if (navigator.serviceWorker.controller) {
+
+                document.getElementById("sw-status").textContent =
+                    "Activo y controlando esta página";
+
+                log(
+                    "El Service Worker está controlando esta página."
+                );
+
+            } else {
+
+                document.getElementById("sw-status").textContent =
+                    "Registrado, pero esta pestaña aún no está controlada";
+
+                log(
+                    "Service Worker registrado. Recarga la página una vez."
+                );
+            }
+        }
+
+
+        /*
+         * Detectar cuando un nuevo Service Worker empieza
+         * a controlar la página.
+         */
+        navigator.serviceWorker?.addEventListener(
+            "controllerchange",
+            () => {
+
+                log(
+                    "Cambio de controlador detectado."
+                );
+
+                updateServiceWorkerStatus();
+            }
+        );
+
+
+        /*
+         * ---------------------------------------------------------
+         * PRUEBA DEL ENDPOINT VIRTUAL
+         * ---------------------------------------------------------
+         */
+
+        async function testServiceWorker() {
+
+            log("Solicitando ./lab-message");
+
+            try {
+
+                /*
+                 * Este archivo NO existe realmente en GitHub.
+                 *
+                 * sw.js debería interceptar esta petición
+                 * y fabricar la respuesta.
+                 */
+                const response =
+                    await fetch("./lab-message");
+
+                log(
+                    `HTTP status: ${response.status}`
+                );
+
+                const data =
+                    await response.json();
+
+                log(
+                    "Respuesta recibida:"
+                );
+
+                log(
+                    JSON.stringify(data, null, 2)
+                );
+
+            } catch (error) {
+
+                log(
+                    `ERROR: ${error.message}`
+                );
+            }
+        }
+
+
+        /*
+         * ---------------------------------------------------------
+         * CONTROLES DE NAVEGACIÓN
+         * ---------------------------------------------------------
+         */
 
         function testExample() {
-            log("Navegando directamente a example.com");
 
-            location.href = "https://example.com/";
+            log(
+                "Navegación directa hacia example.com"
+            );
+
+            location.href =
+                "https://example.com/";
         }
+
 
         function testNeal() {
-            log("Navegando directamente a neal.fun");
 
-            location.href = "https://neal.fun/";
+            log(
+                "Navegación directa hacia neal.fun"
+            );
+
+            location.href =
+                "https://neal.fun/";
         }
+
+
+        /*
+         * ---------------------------------------------------------
+         * INICIO
+         * ---------------------------------------------------------
+         */
+
+        log("Web Filtering Lab iniciado.");
+
+        // Registrar automáticamente el Service Worker.
+        registerServiceWorker();
     </script>
 
 </body>
