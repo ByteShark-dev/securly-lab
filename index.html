@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+
+    <!-- Necesario para que se vea correctamente en Chromebook/móvil. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Web Filtering Lab</title>
+
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .value {
+            font-family: monospace;
+            background: #eee;
+            padding: 4px 8px;
+            border-radius: 5px;
+        }
+
+        button {
+            margin: 5px;
+            padding: 10px 16px;
+        }
+
+        #log {
+            white-space: pre-wrap;
+            background: #111;
+            color: #eee;
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 150px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <h1>Web Filtering Lab</h1>
+
+    <p>
+        Origin:
+        <span id="origin" class="value"></span>
+    </p>
+
+    <p>
+        Host:
+        <span id="host" class="value"></span>
+    </p>
+
+    <p>
+        Protocol:
+        <span id="protocol" class="value"></span>
+    </p>
+
+    <p>
+        Secure Context:
+        <span id="secure" class="value"></span>
+    </p>
+
+    <p>
+        Service Workers:
+        <span id="sw" class="value"></span>
+    </p>
+
+    <p>
+        WebSockets:
+        <span id="ws" class="value"></span>
+    </p>
+
+    <h2>Pruebas</h2>
+
+    <!-- Navegación completamente normal. -->
+    <button onclick="testExample()">
+        Abrir Example.com
+    </button>
+
+    <!-- Sigue siendo una navegación directa normal. -->
+    <button onclick="testNeal()">
+        Abrir Neal.fun
+    </button>
+
+    <h2>Log</h2>
+
+    <div id="log"></div>
+
+    <script>
+        // Mostrar información del contexto actual del navegador.
+        document.getElementById("origin").textContent =
+            location.origin;
+
+        document.getElementById("host").textContent =
+            location.host;
+
+        document.getElementById("protocol").textContent =
+            location.protocol;
+
+        document.getElementById("secure").textContent =
+            window.isSecureContext;
+
+        // Comprobar APIs que necesitaremos en fases posteriores.
+        document.getElementById("sw").textContent =
+            "serviceWorker" in navigator ? "Disponible" : "No disponible";
+
+        document.getElementById("ws").textContent =
+            "WebSocket" in window ? "Disponible" : "No disponible";
+
+        function log(message) {
+            const output = document.getElementById("log");
+
+            output.textContent +=
+                `[${new Date().toLocaleTimeString()}] ${message}\n`;
+        }
+
+        function testExample() {
+            log("Navegando directamente a example.com");
+
+            location.href = "https://example.com/";
+        }
+
+        function testNeal() {
+            log("Navegando directamente a neal.fun");
+
+            location.href = "https://neal.fun/";
+        }
+    </script>
+
+</body>
+</html>
