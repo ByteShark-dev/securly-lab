@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 7C - JavaScript real controlado</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1180px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    .pass { font-weight: 700; }
+    .fail { font-weight: 700; text-decoration: underline; }
+    #runtime-box { padding: 14px; border: 1px dashed #999; border-radius: 8px; min-height: 130px; }
+    #log { min-height: 340px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Fase 7C — JavaScript real en sandbox controlado</h1>
+
+  <p>
+    Esta fase carga una única biblioteca JavaScript pública y fijada por versión:
+    <code>Alpine.js 3.14.9</code> desde jsDelivr. El objetivo es separar carga del script,
+    ejecución, mutación del DOM, eventos, timers y generación dinámica de URLs.
+  </p>
+
+  <a class="button" href="./phase7b.html">← Volver a Fase 7B</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    No hay selector de script ni destino. Alpine es el único recurso externo de esta fase.
+    Las operaciones dinámicas de URL se capturan como intenciones locales: no llamamos
+    <code>fetch()</code>, no abrimos WebSocket y no navegamos hacia esas URLs.
+  </div>
+
+  <div class="panel">
+    <h2>Control</h2>
+    <button onclick="loadExternalRuntime()">1. Cargar Alpine.js</button>
+    <button onclick="initializeRuntime()">2. Inicializar runtime</button>
+    <button onclick="testEventHandler()">3. Probar evento</button>
+    <button onclick="testDynamicUrlIntent()">4. Probar URL dinámica</button>
+    <button onclick="testFetchIntent()">5. Probar intención fetch</button>
+    <button onclick="runAll()">Ejecutar todo</button>
+    <button onclick="resetLab()">Reiniciar resultados</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Script load</strong><span id="load-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Script execution</strong><span id="exec-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>DOM mutation</strong><span id="dom-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Event handler</strong><span id="event-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Timer</strong><span id="timer-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>URL intents</strong><span id="url-count" class="mono">0</span></div>
+    <div class="stat"><strong>Native dynamic requests</strong><span class="mono">0</span></div>
+    <div class="stat"><strong>External requests</strong><span id="external-count" class="mono">0</span></div>
+    <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+  </div>
+
+  <h2>Componente ejecutado por Alpine</h2>
+  <div id="runtime-host" class="panel"></div>
+
+  <h2>Compatibility report</h2>
+  <table>
+    <thead>
+      <tr><th>Capacidad</th><th>Prueba</th><th>Estado</th><th>Qué demuestra</th></tr>
+    </thead>
+    <tbody id="report-body"></tbody>
+  </table>
+
+  <h2>Intenciones dinámicas capturadas</h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>API / superficie</th><th>URL lógica</th><th>Ruta virtual</th><th>Request nativo</th></tr>
+    </thead>
+    <tbody id="intent-body"><tr><td colspan="5">Sin intenciones todavía.</td></tr></tbody>
+  </table>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const ALPINE_URL = "https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js";
+    const FIXED_IMAGE_URL = "https://www.wikipedia.org/portal/wikipedia.org/assets/img/Wikipedia-logo-v2.png";
+    const FIXED_FETCH_URL = "https://example.com/data";
+    const VIRTUAL_PREFIX = `${location.origin}/securly-lab/__js_runtime__/`;
+
+    let alpineScript = null;
+    let runtimeLoaded = false;
+    let runtimeInitialized = false;
+    let externalRequests = 0;
+    let intents = [];
+
+    const statuses = {
+      load: "PENDING",
+      execution: "PENDING",
+      dom: "PENDING",
+      event: "PENDING",
+      timer: "PENDING",
+      dynamicUrl: "PENDING",
+      fetchIntent: "PENDING"
+    };
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById("log").textContent += `[${time}] ${message}\n`;
+    }
+
+    function encodeBase64Url(text) {
+      const bytes = new TextEncoder().encode(text);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    }
+
+    function virtualizeUrl(raw, surface) {
+      const logicalUrl = new URL(raw, "https://demo.invalid/app/index.html").href;
+      const virtualUrl = `${VIRTUAL_PREFIX}${encodeURIComponent(surface)}/${encodeBase64Url(logicalUrl)}`;
+      intents.push({ surface, logicalUrl, virtualUrl, nativeRequest: "NO" });
+      renderIntents();
+      document.getElementById("url-count").textContent = String(intents.length);
+      log(`RUNTIME URL: ${surface} → ${logicalUrl} → ${virtualUrl}; native request=NO.`);
+      return virtualUrl;
+    }
+
+    window.labRuntimeRoute = function(raw, surface) {
+      return virtualizeUrl(raw, surface || "unknown");
+    };
+
+    window.labFetchIntent = function(raw) {
+      const virtualUrl = virtualizeUrl(raw, "fetch");
+      statuses.fetchIntent = "PASS";
+      updateReport();
+      log(`FETCH INTENT: capturado localmente; fetch() nativo NO invocado.`);
+      return { logicalUrl: new URL(raw, "https://demo.invalid/app/index.html").href, virtualUrl };
+    };
+
+    function buildRuntimeMarkup() {
+      document.getElementById("runtime-host").innerHTML = `
+        <div id="runtime-box"
+             x-data="{ count: 0, message: 'Runtime Alpine activo', logicalImage: '${FIXED_IMAGE_URL}' }"
+             x-init="setTimeout(() => message = 'Timer ejecutado', 220)">
+          <p><strong>Mensaje:</strong> <span id="alpine-message" x-text="message">Sin inicializar</span></p>
+          <p><strong>Contador:</strong> <span id="alpine-count" x-text="count">—</span></p>
+          <button id="alpine-button" type="button" x-on:click="count++">Incrementar desde Alpine</button>
+          <div id="dynamic-url" x-bind:data-virtual-src="labRuntimeRoute(logicalImage, 'img.src')"></div>
+          <div id="dynamic-fetch" x-bind:data-fetch-preview="labFetchIntent('${FIXED_FETCH_URL}').virtualUrl"></div>
+        </div>`;
+    }
+
+    function loadExternalRuntime() {
+      if (runtimeLoaded && window.Alpine) {
+        log("SCRIPT: Alpine ya está cargado.");
+        return Promise.resolve(true);
+      }
+
+      document.getElementById("load-status").textContent = "Cargando...";
+      externalRequests += 1;
+      document.getElementById("external-count").textContent = String(externalRequests);
+      log(`SCRIPT: request externo → ${ALPINE_URL}`);
+
+      return new Promise((resolve) => {
+        alpineScript = document.createElement("script");
+        alpineScript.src = ALPINE_URL;
+        alpineScript.async = true;
+        alpineScript.crossOrigin = "anonymous";
+
+        const timeout = setTimeout(() => {
+          statuses.load = "FAIL";
+          document.getElementById("load-status").textContent = "FAIL / timeout";
+          updateReport();
+          log("SCRIPT: timeout esperando Alpine.js.");
+          resolve(false);
+        }, 12000);
+
+        alpineScript.onload = () => {
+          clearTimeout(timeout);
+          runtimeLoaded = true;
+          statuses.load = "PASS";
+          statuses.execution = window.Alpine && typeof window.Alpine.initTree === "function" ? "PASS" : "FAIL";
+          document.getElementById("load-status").textContent = "PASS";
+          document.getElementById("exec-status").textContent = statuses.execution === "PASS"
+            ? `PASS — Alpine ${window.Alpine.version || "cargado"}`
+            : "FAIL — global no disponible";
+          updateReport();
+          log(`SCRIPT: load recibido; Alpine global=${Boolean(window.Alpine)}.`);
+          resolve(statuses.execution === "PASS");
+        };
+
+        alpineScript.onerror = () => {
+          clearTimeout(timeout);
+          statuses.load = "FAIL";
+          statuses.execution = "FAIL";
+          document.getElementById("load-status").textContent = "FAIL";
+          document.getElementById("exec-status").textContent = "FAIL";
+          updateReport();
+          log("SCRIPT: error cargando Alpine.js.");
+          resolve(false);
+        };
+
+        document.head.appendChild(alpineScript);
+      });
+    }
+
+    async function initializeRuntime() {
+      if (!runtimeLoaded || !window.Alpine) {
+        const ok = await loadExternalRuntime();
+        if (!ok) return false;
+      }
+
+      if (runtimeInitialized) {
+        log("RUNTIME: ya estaba inicializado; se conserva la instancia actual.");
+        return true;
+      }
+
+      buildRuntimeMarkup();
+      const box = document.getElementById("runtime-box");
+
+      try {
+        window.Alpine.initTree(box);
+        runtimeInitialized = true;
+      } catch (error) {
+        statuses.dom = "FAIL";
+        document.getElementById("dom-status").textContent = `FAIL — ${error.name}`;
+        updateReport();
+        log(`RUNTIME: initTree falló → ${error.name}: ${error.message}`);
+        return false;
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 60));
+      const message = document.getElementById("alpine-message")?.textContent;
+      const count = document.getElementById("alpine-count")?.textContent;
+      statuses.dom = message === "Runtime Alpine activo" && count === "0" ? "PASS" : "FAIL";
+      document.getElementById("dom-status").textContent = statuses.dom === "PASS" ? "PASS" : `FAIL — message=${message}; count=${count}`;
+
+      await new Promise(resolve => setTimeout(resolve, 260));
+      const timerMessage = document.getElementById("alpine-message")?.textContent;
+      statuses.timer = timerMessage === "Timer ejecutado" ? "PASS" : "FAIL";
+      document.getElementById("timer-status").textContent = statuses.timer === "PASS" ? "PASS" : `FAIL — ${timerMessage}`;
+
+      statuses.dynamicUrl = intents.some(item => item.surface === "img.src") ? "PASS" : "FAIL";
+      statuses.fetchIntent = intents.some(item => item.surface === "fetch") ? "PASS" : "FAIL";
+
+      updateReport();
+      log(`RUNTIME: DOM=${statuses.dom}; timer=${statuses.timer}; intents=${intents.length}.`);
+      return statuses.dom === "PASS";
+    }
+
+    async function testEventHandler() {
+      if (!runtimeInitialized) {
+        const ok = await initializeRuntime();
+        if (!ok) return false;
+      }
+
+      const before = document.getElementById("alpine-count")?.textContent;
+      document.getElementById("alpine-button")?.click();
+      await new Promise(resolve => setTimeout(resolve, 40));
+      const after = document.getElementById("alpine-count")?.textContent;
+
+      statuses.event = before === "0" && after === "1" ? "PASS" : "FAIL";
+      document.getElementById("event-status").textContent = statuses.event === "PASS" ? "PASS — 0 → 1" : `FAIL — ${before} → ${after}`;
+      updateReport();
+      log(`EVENT: contador ${before} → ${after}; estado=${statuses.event}.`);
+      return statuses.event === "PASS";
+    }
+
+    async function testDynamicUrlIntent() {
+      if (!runtimeInitialized) await initializeRuntime();
+      const node = document.getElementById("dynamic-url");
+      const value = node?.getAttribute("data-virtual-src") || "";
+      const ok = value.startsWith(VIRTUAL_PREFIX) && intents.some(item => item.surface === "img.src");
+      statuses.dynamicUrl = ok ? "PASS" : "FAIL";
+      updateReport();
+      log(`DYNAMIC URL: ${ok ? "capturada" : "no capturada"}; request nativo=NO.`);
+      return ok;
+    }
+
+    async function testFetchIntent() {
+      if (!runtimeInitialized) await initializeRuntime();
+      const node = document.getElementById("dynamic-fetch");
+      const value = node?.getAttribute("data-fetch-preview") || "";
+      const ok = value.startsWith(VIRTUAL_PREFIX) && intents.some(item => item.surface === "fetch");
+      statuses.fetchIntent = ok ? "PASS" : "FAIL";
+      updateReport();
+      log(`FETCH INTENT CHECK: ${ok ? "capturada" : "no capturada"}; fetch nativo=NO.`);
+      return ok;
+    }
+
+    function renderIntents() {
+      const body = document.getElementById("intent-body");
+      body.innerHTML = "";
+      if (!intents.length) {
+        body.innerHTML = '<tr><td colspan="5">Sin intenciones todavía.</td></tr>';
+        return;
+      }
+      intents.forEach((intent, index) => {
+        const row = document.createElement("tr");
+        [index + 1, intent.surface, intent.logicalUrl, intent.virtualUrl, intent.nativeRequest].forEach(value => {
+          const cell = document.createElement("td");
+          cell.textContent = String(value);
+          cell.className = "mono";
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+    }
+
+    function updateReport() {
+      const rows = [
+        ["Script externo", "<script src=jsDelivr>", statuses.load, "El navegador pudo descargar el JavaScript real."],
+        ["Ejecución", "window.Alpine + initTree", statuses.execution, "El código remoto se evaluó y expuso su runtime."],
+        ["DOM mutation", "x-text", statuses.dom, "El runtime externo modificó nodos de nuestra página."],
+        ["Event handler", "x-on:click", statuses.event, "El runtime instaló y ejecutó lógica de eventos."],
+        ["Timer", "x-init + setTimeout", statuses.timer, "Una expresión ejecutada por el runtime produjo estado asíncrono."],
+        ["URL dinámica", "x-bind:data-virtual-src", statuses.dynamicUrl, "La URL fue capturada y transformada sin request nativo."],
+        ["fetch dinámico", "labFetchIntent()", statuses.fetchIntent, "La intención se registró sin invocar fetch() real."]
+      ];
+
+      const body = document.getElementById("report-body");
+      body.innerHTML = "";
+      rows.forEach(rowData => {
+        const row = document.createElement("tr");
+        rowData.forEach((value, index) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          if (index === 2) cell.className = value === "PASS" ? "pass mono" : value === "FAIL" ? "fail mono" : "mono";
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+
+      const pass = Object.values(statuses).filter(v => v === "PASS").length;
+      const fail = Object.values(statuses).filter(v => v === "FAIL").length;
+      if (pass === 7) document.getElementById("result").textContent = "OK: JavaScript real + runtime dinámico validado";
+      else if (fail > 0) document.getElementById("result").textContent = `Prueba parcial: ${pass}/7 PASS; ${fail} FAIL`;
+      else document.getElementById("result").textContent = "En progreso";
+    }
+
+    async function runAll() {
+      resetLab(false);
+      log("RUN ALL: iniciando 7C.");
+      const loaded = await loadExternalRuntime();
+      if (!loaded) {
+        document.getElementById("result").textContent = "STOP: script externo no disponible";
+        return;
+      }
+      await initializeRuntime();
+      await testEventHandler();
+      await testDynamicUrlIntent();
+      await testFetchIntent();
+      updateReport();
+      log(`RESULT: ${Object.values(statuses).filter(v => v === "PASS").length}/7 PASS; externalRequests=${externalRequests}; nativeDynamicRequests=0.`);
+    }
+
+    function resetLab(clearLog = true) {
+      runtimeInitialized = false;
+      intents = [];
+      Object.keys(statuses).forEach(key => statuses[key] = runtimeLoaded && key === "load" ? "PASS" : runtimeLoaded && key === "execution" && window.Alpine ? "PASS" : "PENDING");
+
+      document.getElementById("runtime-host").innerHTML = '<div id="runtime-box">Runtime todavía no inicializado.</div>';
+      document.getElementById("load-status").textContent = runtimeLoaded ? "PASS — ya cargado" : "No probado";
+      document.getElementById("exec-status").textContent = runtimeLoaded && window.Alpine ? "PASS" : "No probado";
+      document.getElementById("dom-status").textContent = "No probado";
+      document.getElementById("event-status").textContent = "No probado";
+      document.getElementById("timer-status").textContent = "No probado";
+      document.getElementById("url-count").textContent = "0";
+      document.getElementById("external-count").textContent = String(externalRequests);
+      document.getElementById("result").textContent = "No probado";
+      renderIntents();
+      updateReport();
+
+      if (clearLog) {
+        document.getElementById("log").textContent = "";
+        log("Fase 7C lista. Alpine todavía no se ha solicitado si esta es la primera ejecución.");
+      }
+    }
+
+    resetLab();
+  </script>
+</body>
+</html>
