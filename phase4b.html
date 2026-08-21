@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 4B - Multiplexación WebSocket</title>
+
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 950px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.5;
+        }
+
+        h1, h2, h3 {
+            margin-bottom: 10px;
+        }
+
+        .note {
+            background: #f6f6f6;
+            padding: 12px;
+            border-left: 4px solid #999999;
+            margin: 15px 0;
+        }
+
+        .panel {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .stat {
+            background: #f4f4f4;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .stat strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .value {
+            font-family: monospace;
+            word-break: break-all;
+        }
+
+        button,
+        a.button {
+            display: inline-block;
+            margin: 5px 5px 5px 0;
+            padding: 10px 16px;
+            border: 1px solid #999999;
+            border-radius: 4px;
+            background: #ffffff;
+            color: #111111;
+            text-decoration: none;
+            cursor: pointer;
+            font: inherit;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 12px;
+        }
+
+        th,
+        td {
+            border: 1px solid #cccccc;
+            padding: 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th {
+            background: #f4f4f4;
+        }
+
+        .streams {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+        }
+
+        .stream {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .stream-log {
+            white-space: pre-wrap;
+            font-family: monospace;
+            min-height: 90px;
+            background: #f7f7f7;
+            padding: 10px;
+            border-radius: 5px;
+        }
+
+        #log {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #111111;
+            color: #eeeeee;
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 260px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Fase 4B — Multiplexación sobre un WebSocket</h1>
+
+    <p>
+        Esta prueba usa una sola conexión física a Postman Echo. Encima de esa
+        conexión enviamos mensajes JSON etiquetados con distintos <code>streamId</code>
+        y luego los volvemos a separar al recibirlos.
+    </p>
+
+    <a class="button" href="./">← Volver al laboratorio principal</a>
+
+    <div class="note">
+        Esto NO es Wisp y NO abre conexiones hacia otros destinos. Postman únicamente
+        devuelve exactamente los mismos mensajes que le enviamos. La multiplexación
+        ocurre en nuestra propia lógica de JavaScript.
+    </div>
+
+    <h2>Modelo</h2>
+
+    <pre>
+UNA conexión WebSocket
+        │
+        ├── stream 1 → alpha
+        ├── stream 2 → beta
+        ├── stream 3 → gamma
+        ├── stream 1 → delta
+        └── stream 2 → epsilon
+    </pre>
+
+    <div class="panel">
+        <h2>Control</h2>
+
+        <button onclick="runMultiplexTest()">
+            Ejecutar prueba multiplexada
+        </button>
+
+        <button onclick="closeMuxSocket()">
+            Cerrar conexión
+        </button>
+
+        <button onclick="resetLab()">
+            Reiniciar resultados
+        </button>
+    </div>
+
+    <div class="stats">
+        <div class="stat">
+            <strong>Estado WebSocket</strong>
+            <span id="socket-state" class="value">No conectado</span>
+        </div>
+
+        <div class="stat">
+            <strong>Conexiones físicas creadas</strong>
+            <span id="physical-connections" class="value">0</span>
+        </div>
+
+        <div class="stat">
+            <strong>Streams lógicos</strong>
+            <span id="logical-streams" class="value">0</span>
+        </div>
+
+        <div class="stat">
+            <strong>Mensajes enviados</strong>
+            <span id="sent-count" class="value">0</span>
+        </div>
+
+        <div class="stat">
+            <strong>Mensajes recibidos</strong>
+            <span id="received-count" class="value">0</span>
+        </div>
+
+        <div class="stat">
+            <strong>Resultado</strong>
+            <span id="test-result" class="value">No probado</span>
+        </div>
+    </div>
+
+    <h2>Paquetes de la prueba</h2>
+
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>streamId</th>
+                <th>seq</th>
+                <th>payload</th>
+                <th>Estado</th>
+            </tr>
+        </thead>
+        <tbody id="packet-table"></tbody>
+    </table>
+
+    <h2>Demultiplexación</h2>
+
+    <p>
+        Al regresar cada mensaje, JavaScript lee <code>streamId</code> y lo coloca
+        en su canal lógico correspondiente.
+    </p>
+
+    <div class="streams">
+        <div class="stream">
+            <h3>Stream 1</h3>
+            <div id="stream-1" class="stream-log">Sin mensajes</div>
+        </div>
+
+        <div class="stream">
+            <h3>Stream 2</h3>
+            <div id="stream-2" class="stream-log">Sin mensajes</div>
+        </div>
+
+        <div class="stream">
+            <h3>Stream 3</h3>
+            <div id="stream-3" class="stream-log">Sin mensajes</div>
+        </div>
+    </div>
+
+    <h2>Log de transporte</h2>
+
+    <div id="log"></div>
+
+    <script>
+        // Endpoint público de eco WebSocket usado en la Fase 4A.
+        const WS_URL = "wss://ws.postman-echo.com/raw";
+
+        // Cinco mensajes lógicos que viajarán por UNA sola conexión física.
+        const PACKETS = [
+            { streamId: 1, seq: 1, payload: "alpha" },
+            { streamId: 2, seq: 1, payload: "beta" },
+            { streamId: 3, seq: 1, payload: "gamma" },
+            { streamId: 1, seq: 2, payload: "delta" },
+            { streamId: 2, seq: 2, payload: "epsilon" }
+        ];
+
+        let muxSocket = null;
+        let timeoutId = null;
+        let sentCount = 0;
+        let receivedCount = 0;
+        let physicalConnections = 0;
+        let receivedPacketKeys = new Set();
+
+        // Construir la tabla inicial de paquetes.
+        function renderPacketTable() {
+            const body = document.getElementById("packet-table");
+            body.innerHTML = "";
+
+            PACKETS.forEach((packet, index) => {
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${packet.streamId}</td>
+                    <td>${packet.seq}</td>
+                    <td>${packet.payload}</td>
+                    <td id="packet-status-${index}">Pendiente</td>
+                `;
+                body.appendChild(row);
+            });
+        }
+
+        function log(message) {
+            const output = document.getElementById("log");
+            const time = new Date().toLocaleTimeString();
+            output.textContent += `[${time}] ${message}\n`;
+        }
+
+        function setSocketState(text) {
+            document.getElementById("socket-state").textContent = text;
+        }
+
+        function updateCounters() {
+            document.getElementById("physical-connections").textContent =
+                String(physicalConnections);
+
+            document.getElementById("logical-streams").textContent =
+                String(new Set(PACKETS.map(packet => packet.streamId)).size);
+
+            document.getElementById("sent-count").textContent =
+                String(sentCount);
+
+            document.getElementById("received-count").textContent =
+                String(receivedCount);
+        }
+
+        function packetKey(packet) {
+            return `${packet.streamId}:${packet.seq}:${packet.payload}`;
+        }
+
+        function findPacketIndex(packet) {
+            return PACKETS.findIndex(candidate =>
+                candidate.streamId === packet.streamId &&
+                candidate.seq === packet.seq &&
+                candidate.payload === packet.payload
+            );
+        }
+
+        function appendToLogicalStream(packet) {
+            const target = document.getElementById(`stream-${packet.streamId}`);
+
+            if (!target) {
+                log(`DEMUX: stream desconocido ${packet.streamId}`);
+                return;
+            }
+
+            if (target.textContent === "Sin mensajes") {
+                target.textContent = "";
+            }
+
+            target.textContent +=
+                `seq=${packet.seq} → ${packet.payload}\n`;
+        }
+
+        function runMultiplexTest() {
+            // Evitar que queden conexiones o temporizadores de una prueba anterior.
+            closeMuxSocket(false);
+            resetResultsOnly();
+
+            setSocketState("Conectando...");
+            document.getElementById("test-result").textContent = "En progreso";
+
+            log(`SOCKET: creando UNA conexión física → ${WS_URL}`);
+
+            try {
+                muxSocket = new WebSocket(WS_URL);
+                physicalConnections += 1;
+                updateCounters();
+            } catch (error) {
+                setSocketState("Error al crear WebSocket");
+                document.getElementById("test-result").textContent = "Falló";
+                log(`SOCKET: excepción inmediata → ${error.message}`);
+                return;
+            }
+
+            timeoutId = setTimeout(() => {
+                document.getElementById("test-result").textContent =
+                    "Timeout antes de recibir todos los mensajes";
+
+                log("SOCKET: timeout de 10 segundos.");
+                closeMuxSocket(false);
+            }, 10000);
+
+            muxSocket.addEventListener("open", () => {
+                setSocketState("OPEN");
+                log("SOCKET: OPEN.");
+                log("MUX: enviando 5 paquetes lógicos por la MISMA conexión.");
+
+                PACKETS.forEach((packet, index) => {
+                    const frame = JSON.stringify(packet);
+
+                    muxSocket.send(frame);
+                    sentCount += 1;
+
+                    document.getElementById(
+                        `packet-status-${index}`
+                    ).textContent = "Enviado";
+
+                    log(
+                        `TX stream=${packet.streamId} seq=${packet.seq} payload=${packet.payload}`
+                    );
+                });
+
+                updateCounters();
+            });
+
+            muxSocket.addEventListener("message", event => {
+                let packet;
+
+                try {
+                    // Postman Echo devuelve el mismo texto enviado.
+                    packet = JSON.parse(String(event.data));
+                } catch (error) {
+                    log(`RX: mensaje no JSON → ${String(event.data)}`);
+                    return;
+                }
+
+                if (
+                    typeof packet.streamId !== "number" ||
+                    typeof packet.seq !== "number" ||
+                    typeof packet.payload !== "string"
+                ) {
+                    log("RX: JSON recibido, pero no tiene nuestro formato de paquete.");
+                    return;
+                }
+
+                const key = packetKey(packet);
+
+                // Evitar contar duplicados si el servicio devolviera alguno.
+                if (receivedPacketKeys.has(key)) {
+                    log(`RX duplicado ignorado → ${key}`);
+                    return;
+                }
+
+                receivedPacketKeys.add(key);
+                receivedCount += 1;
+
+                log(
+                    `RX stream=${packet.streamId} seq=${packet.seq} payload=${packet.payload}`
+                );
+
+                // Esta es la parte de DEMULTIPLEXACIÓN:
+                // usamos streamId para decidir a qué canal lógico pertenece.
+                appendToLogicalStream(packet);
+
+                const index = findPacketIndex(packet);
+                if (index >= 0) {
+                    document.getElementById(
+                        `packet-status-${index}`
+                    ).textContent = "Eco recibido";
+                }
+
+                updateCounters();
+
+                if (receivedCount === PACKETS.length) {
+                    if (timeoutId) {
+                        clearTimeout(timeoutId);
+                        timeoutId = null;
+                    }
+
+                    document.getElementById("test-result").textContent =
+                        "OK: 5/5 mensajes por 1 conexión";
+
+                    log("MUX: prueba completada. 3 streams lógicos, 1 socket físico.");
+                }
+            });
+
+            muxSocket.addEventListener("error", () => {
+                setSocketState("ERROR");
+                document.getElementById("test-result").textContent = "Error WebSocket";
+                log("SOCKET: evento error.");
+            });
+
+            muxSocket.addEventListener("close", event => {
+                setSocketState(`CLOSED (${event.code})`);
+                log(
+                    `SOCKET: CLOSE code=${event.code}, clean=${event.wasClean}`
+                );
+            });
+        }
+
+        function closeMuxSocket(writeLog = true) {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
+
+            if (muxSocket) {
+                if (
+                    muxSocket.readyState === WebSocket.CONNECTING ||
+                    muxSocket.readyState === WebSocket.OPEN
+                ) {
+                    muxSocket.close(1000, "Lab complete");
+                }
+
+                muxSocket = null;
+
+                if (writeLog) {
+                    log("SOCKET: cierre solicitado por el usuario.");
+                }
+            }
+        }
+
+        function resetResultsOnly() {
+            sentCount = 0;
+            receivedCount = 0;
+            physicalConnections = 0;
+            receivedPacketKeys = new Set();
+
+            document.getElementById("test-result").textContent = "No probado";
+            document.getElementById("socket-state").textContent = "No conectado";
+
+            for (const id of ["stream-1", "stream-2", "stream-3"]) {
+                document.getElementById(id).textContent = "Sin mensajes";
+            }
+
+            renderPacketTable();
+            updateCounters();
+        }
+
+        function resetLab() {
+            closeMuxSocket(false);
+            document.getElementById("log").textContent = "";
+            resetResultsOnly();
+            log("Laboratorio reiniciado.");
+        }
+
+        // Estado inicial.
+        renderPacketTable();
+        updateCounters();
+        log("Fase 4B lista. Aún no se ha creado ningún WebSocket.");
+    </script>
+</body>
+</html>
