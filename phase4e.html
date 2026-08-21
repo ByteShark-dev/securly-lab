@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 4E - Handshake Wisp</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 1050px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.5;
+        }
+        h1, h2, h3 { margin-bottom: 10px; }
+        .note {
+            background: #f6f6f6;
+            padding: 12px;
+            border-left: 4px solid #999999;
+            margin: 15px 0;
+        }
+        .panel {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        button,
+        a.button {
+            display: inline-block;
+            margin: 5px 5px 5px 0;
+            padding: 10px 16px;
+            border: 1px solid #999999;
+            border-radius: 4px;
+            background: #ffffff;
+            color: #111111;
+            text-decoration: none;
+            cursor: pointer;
+            font: inherit;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0 25px;
+        }
+        th, td {
+            border: 1px solid #cccccc;
+            padding: 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th { background: #f4f4f4; }
+        code, .mono {
+            font-family: monospace;
+            word-break: break-all;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .stat {
+            background: #f4f4f4;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .stat strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .state-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 12px;
+        }
+        .state-card {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+            padding: 14px;
+        }
+        #log {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #111111;
+            color: #eeeeee;
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 320px;
+            font-family: monospace;
+        }
+        .frame-box {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f8f8f8;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Fase 4E — Handshake Wisp v2 con máquinas de estado</h1>
+
+    <p>
+        Esta fase modela el handshake inicial de Wisp v2 usando frames binarios reales,
+        pero sin conectarse a un servidor Wisp. Postman Echo solo transporta un sobre
+        de texto con los bytes codificados en Base64. El cliente y el servidor Wisp
+        son dos máquinas de estado locales dentro de esta página.
+    </p>
+
+    <a class="button" href="./phase4d.html">← Volver a Fase 4D</a>
+    <a class="button" href="./">Laboratorio principal</a>
+
+    <div class="note">
+        El servidor simulado NO abre sockets TCP/UDP ni contacta el hostname incluido
+        en CONNECT. El único endpoint de red usado por esta fase es
+        <code>wss://ws.postman-echo.com/raw</code>.
+    </div>
+
+    <h2>Secuencia que vamos a probar</h2>
+
+    <div class="frame-box">1. C → S  CONNECT stream=7 antes del handshake        → REJECT
+2. S → C  INFO stream=7                               → REJECT
+3. S → C  INFO stream=0, versión 2.1                  → ACCEPT
+4. C → S  INFO stream=0, versión 2.1                  → ACCEPT
+5. S → C  CONTINUE stream=0, buffer=8                 → ACCEPT / READY
+6. C → S  CONNECT stream=7, TCP example.com:443       → ACCEPT</div>
+
+    <div class="panel">
+        <h2>Control</h2>
+        <button onclick="runHandshakeScenario()">Ejecutar handshake completo</button>
+        <button onclick="resetLab()">Reiniciar</button>
+    </div>
+
+    <div class="stats">
+        <div class="stat">
+            <strong>WebSocket físico</strong>
+            <span id="socket-state" class="mono">No conectado</span>
+        </div>
+        <div class="stat">
+            <strong>Conexiones físicas</strong>
+            <span id="physical-count" class="mono">0</span>
+        </div>
+        <div class="stat">
+            <strong>Frames transportados</strong>
+            <span id="transported-count" class="mono">0</span>
+        </div>
+        <div class="stat">
+            <strong>Aceptados</strong>
+            <span id="accepted-count" class="mono">0</span>
+        </div>
+        <div class="stat">
+            <strong>Rechazados</strong>
+            <span id="rejected-count" class="mono">0</span>
+        </div>
+        <div class="stat">
+            <strong>Resultado</strong>
+            <span id="result" class="mono">No probado</span>
+        </div>
+    </div>
+
+    <h2>Estados</h2>
+    <div class="state-grid">
+        <div class="state-card">
+            <h3>Cliente Wisp</h3>
+            <p>Estado: <span id="client-state" class="mono">WAIT_SERVER_INFO</span></p>
+            <p>Interpretación: espera el INFO inicial del servidor.</p>
+        </div>
+        <div class="state-card">
+            <h3>Servidor Wisp simulado</h3>
+            <p>Estado: <span id="server-state" class="mono">WAIT_CLIENT_INFO</span></p>
+            <p>Stream 7: <span id="stream-state" class="mono">NEW</span></p>
+        </div>
+    </div>
+
+    <h2>Pasos</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Dirección</th>
+                <th>Frame</th>
+                <th>streamId</th>
+                <th>Esperado</th>
+                <th>Observado</th>
+                <th>Motivo</th>
+            </tr>
+        </thead>
+        <tbody id="steps-body"></tbody>
+    </table>
+
+    <h2>Último frame decodificado</h2>
+    <div id="decoded" class="frame-box">Sin frames.</div>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+
+    <script>
+        const WS_URL = "wss://ws.postman-echo.com/raw";
+
+        const TYPE_CONNECT = 0x01;
+        const TYPE_DATA = 0x02;
+        const TYPE_CONTINUE = 0x03;
+        const TYPE_CLOSE = 0x04;
+        const TYPE_INFO = 0x05;
+
+        const textEncoder = new TextEncoder();
+        const textDecoder = new TextDecoder();
+
+        let socket = null;
+        let physicalConnections = 0;
+        let transportedCount = 0;
+        let acceptedCount = 0;
+        let rejectedCount = 0;
+        let clientState = "WAIT_SERVER_INFO";
+        let serverState = "WAIT_CLIENT_INFO";
+        let stream7State = "NEW";
+        let requestCounter = 0;
+        let pending = new Map();
+        let running = false;
+
+        const STEPS = [
+            { direction: "C→S", label: "CONNECT prematuro", expected: "REJECT" },
+            { direction: "S→C", label: "INFO con stream incorrecto", expected: "REJECT" },
+            { direction: "S→C", label: "INFO servidor v2.1", expected: "ACCEPT" },
+            { direction: "C→S", label: "INFO cliente v2.1", expected: "ACCEPT" },
+            { direction: "S→C", label: "CONTINUE handshake", expected: "ACCEPT" },
+            { direction: "C→S", label: "CONNECT después de READY", expected: "ACCEPT" }
+        ];
+
+        function log(message) {
+            const output = document.getElementById("log");
+            const time = new Date().toLocaleTimeString();
+            output.textContent += `[${time}] ${message}\n`;
+        }
+
+        function concatBytes(...parts) {
+            const total = parts.reduce((sum, part) => sum + part.length, 0);
+            const result = new Uint8Array(total);
+            let offset = 0;
+            for (const part of parts) {
+                result.set(part, offset);
+                offset += part.length;
+            }
+            return result;
+        }
+
+        function makeHeader(type, streamId) {
+            const header = new Uint8Array(5);
+            const view = new DataView(header.buffer);
+            header[0] = type;
+            view.setUint32(1, streamId, true);
+            return header;
+        }
+
+        function encodeInfo(streamId, major, minor) {
+            return concatBytes(
+                makeHeader(TYPE_INFO, streamId),
+                new Uint8Array([major, minor])
+            );
+        }
+
+        function encodeContinue(streamId, bufferRemaining) {
+            const payload = new Uint8Array(4);
+            new DataView(payload.buffer).setUint32(0, bufferRemaining, true);
+            return concatBytes(makeHeader(TYPE_CONTINUE, streamId), payload);
+        }
+
+        function encodeConnect(streamId, hostname, port) {
+            const hostBytes = textEncoder.encode(hostname);
+            const prefix = new Uint8Array(3);
+            const view = new DataView(prefix.buffer);
+            prefix[0] = 0x01; // TCP
+            view.setUint16(1, port, true);
+            return concatBytes(makeHeader(TYPE_CONNECT, streamId), prefix, hostBytes);
+        }
+
+        function packetTypeName(type) {
+            if (type === TYPE_CONNECT) return "CONNECT";
+            if (type === TYPE_DATA) return "DATA";
+            if (type === TYPE_CONTINUE) return "CONTINUE";
+            if (type === TYPE_CLOSE) return "CLOSE";
+            if (type === TYPE_INFO) return "INFO";
+            return `UNKNOWN(0x${type.toString(16)})`;
+        }
+
+        function decodeFrame(bytes) {
+            if (bytes.length < 5) {
+                return { valid: false, error: "Frame demasiado corto" };
+            }
+
+            const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            const type = bytes[0];
+            const streamId = view.getUint32(1, true);
+            const payload = bytes.slice(5);
+            const frame = {
+                valid: true,
+                type,
+                typeName: packetTypeName(type),
+                streamId,
+                payloadLength: payload.length
+            };
+
+            if (type === TYPE_INFO) {
+                if (payload.length < 2) {
+                    frame.valid = false;
+                    frame.error = "INFO incompleto";
+                } else {
+                    frame.major = payload[0];
+                    frame.minor = payload[1];
+                }
+            }
+
+            if (type === TYPE_CONTINUE) {
+                if (payload.length < 4) {
+                    frame.valid = false;
+                    frame.error = "CONTINUE incompleto";
+                } else {
+                    frame.bufferRemaining = new DataView(
+                        payload.buffer,
+                        payload.byteOffset,
+                        payload.byteLength
+                    ).getUint32(0, true);
+                }
+            }
+
+            if (type === TYPE_CONNECT) {
+                if (payload.length < 3) {
+                    frame.valid = false;
+                    frame.error = "CONNECT incompleto";
+                } else {
+                    const payloadView = new DataView(
+                        payload.buffer,
+                        payload.byteOffset,
+                        payload.byteLength
+                    );
+                    frame.streamType = payload[0] === 0x01 ? "TCP" :
+                        payload[0] === 0x02 ? "UDP" : `0x${payload[0].toString(16)}`;
+                    frame.port = payloadView.getUint16(1, true);
+                    frame.hostname = textDecoder.decode(payload.slice(3));
+                }
+            }
+
+            return frame;
+        }
+
+        function bytesToBase64(bytes) {
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary);
+        }
+
+        function base64ToBytes(base64) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        function updateUi() {
+            document.getElementById("physical-count").textContent = String(physicalConnections);
+            document.getElementById("transported-count").textContent = String(transportedCount);
+            document.getElementById("accepted-count").textContent = String(acceptedCount);
+            document.getElementById("rejected-count").textContent = String(rejectedCount);
+            document.getElementById("client-state").textContent = clientState;
+            document.getElementById("server-state").textContent = serverState;
+            document.getElementById("stream-state").textContent = stream7State;
+        }
+
+        function renderSteps() {
+            const body = document.getElementById("steps-body");
+            body.innerHTML = "";
+            STEPS.forEach((step, index) => {
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${step.direction}</td>
+                    <td>${step.label}</td>
+                    <td id="step-stream-${index}">—</td>
+                    <td>${step.expected}</td>
+                    <td id="step-result-${index}">Pendiente</td>
+                    <td id="step-reason-${index}">—</td>
+                `;
+                body.appendChild(row);
+            });
+        }
+
+        function renderDecoded(frame) {
+            const lines = [
+                `type: ${frame.typeName}`,
+                `streamId: ${frame.streamId}`,
+                `payloadLength: ${frame.payloadLength}`
+            ];
+
+            if (frame.typeName === "INFO") {
+                lines.push(`version: ${frame.major}.${frame.minor}`);
+            }
+            if (frame.typeName === "CONTINUE") {
+                lines.push(`bufferRemaining: ${frame.bufferRemaining}`);
+            }
+            if (frame.typeName === "CONNECT") {
+                lines.push(`streamType: ${frame.streamType}`);
+                lines.push(`hostname: ${frame.hostname}`);
+                lines.push(`port: ${frame.port}`);
+            }
+
+            document.getElementById("decoded").textContent = lines.join("\n");
+        }
+
+        function accept(reason) {
+            acceptedCount += 1;
+            updateUi();
+            return { accepted: true, reason };
+        }
+
+        function reject(reason) {
+            rejectedCount += 1;
+            updateUi();
+            return { accepted: false, reason };
+        }
+
+        function processClient(frame) {
+            if (!frame.valid) return reject(frame.error || "Frame inválido");
+
+            if (frame.type === TYPE_INFO) {
+                if (frame.streamId !== 0) {
+                    return reject("INFO de handshake debe usar streamId 0");
+                }
+                if (clientState !== "WAIT_SERVER_INFO") {
+                    return reject(`INFO inesperado mientras cliente está ${clientState}`);
+                }
+                if (frame.major !== 2) {
+                    return reject(`Versión mayor no compatible: ${frame.major}`);
+                }
+
+                clientState = "SEND_CLIENT_INFO";
+                updateUi();
+                return accept(`INFO servidor ${frame.major}.${frame.minor} válido`);
+            }
+
+            if (frame.type === TYPE_CONTINUE) {
+                if (frame.streamId !== 0) {
+                    return reject("CONTINUE del handshake debe usar streamId 0");
+                }
+                if (clientState !== "WAIT_SERVER_CONTINUE") {
+                    return reject(`CONTINUE inesperado mientras cliente está ${clientState}`);
+                }
+
+                clientState = "READY";
+                serverState = "READY";
+                updateUi();
+                return accept(`Handshake aceptado; buffer inicial=${frame.bufferRemaining}`);
+            }
+
+            if (clientState !== "READY") {
+                return reject(`Cliente aún no está READY; recibió ${frame.typeName}`);
+            }
+
+            return accept(`${frame.typeName} permitido en estado READY`);
+        }
+
+        function processServer(frame) {
+            if (!frame.valid) return reject(frame.error || "Frame inválido");
+
+            if (frame.type === TYPE_INFO) {
+                if (frame.streamId !== 0) {
+                    return reject("INFO de handshake debe usar streamId 0");
+                }
+                if (serverState !== "WAIT_CLIENT_INFO") {
+                    return reject(`INFO inesperado mientras servidor está ${serverState}`);
+                }
+                if (frame.major !== 2) {
+                    return reject(`Versión mayor no compatible: ${frame.major}`);
+                }
+
+                serverState = "SEND_CONTINUE";
+                updateUi();
+                return accept(`INFO cliente ${frame.major}.${frame.minor} válido`);
+            }
+
+            if (frame.type === TYPE_CONNECT) {
+                if (serverState !== "READY") {
+                    return reject(`CONNECT bloqueado por estado: servidor=${serverState}`);
+                }
+                if (frame.streamId === 0) {
+                    return reject("streamId 0 está reservado para handshake");
+                }
+
+                stream7State = "OPEN (simulado)";
+                updateUi();
+                return accept(
+                    `CONNECT válido para ${frame.streamType} ${frame.hostname}:${frame.port}; no se abre socket real`
+                );
+            }
+
+            if (serverState !== "READY") {
+                return reject(`Servidor aún no está READY; recibió ${frame.typeName}`);
+            }
+
+            return accept(`${frame.typeName} permitido en estado READY`);
+        }
+
+        function ensureSocket() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                return Promise.resolve();
+            }
+
+            return new Promise((resolve, rejectPromise) => {
+                document.getElementById("socket-state").textContent = "Conectando...";
+                log(`SOCKET: conectando → ${WS_URL}`);
+
+                try {
+                    socket = new WebSocket(WS_URL);
+                } catch (error) {
+                    rejectPromise(error);
+                    return;
+                }
+
+                const openTimeout = setTimeout(() => {
+                    rejectPromise(new Error("Timeout abriendo WebSocket"));
+                }, 8000);
+
+                socket.addEventListener("open", () => {
+                    clearTimeout(openTimeout);
+                    physicalConnections += 1;
+                    document.getElementById("socket-state").textContent = "OPEN";
+                    updateUi();
+                    log("SOCKET: OPEN.");
+                    resolve();
+                }, { once: true });
+
+                socket.addEventListener("message", event => {
+                    let envelope;
+                    try {
+                        envelope = JSON.parse(String(event.data));
+                    } catch {
+                        log("RX: mensaje de Echo que no pertenece al laboratorio.");
+                        return;
+                    }
+
+                    if (envelope.kind !== "phase4e" || !envelope.requestId) return;
+
+                    const waiter = pending.get(envelope.requestId);
+                    if (!waiter) return;
+
+                    clearTimeout(waiter.timeoutId);
+                    pending.delete(envelope.requestId);
+
+                    try {
+                        const bytes = base64ToBytes(envelope.frameBase64);
+                        const frame = decodeFrame(bytes);
+                        renderDecoded(frame);
+
+                        let result;
+                        if (envelope.direction === "C→S") {
+                            result = processServer(frame);
+                        } else {
+                            result = processClient(frame);
+                        }
+
+                        waiter.resolve({ frame, result });
+                    } catch (error) {
+                        waiter.reject(error);
+                    }
+                });
+
+                socket.addEventListener("error", () => {
+                    document.getElementById("socket-state").textContent = "ERROR";
+                    log("SOCKET: evento error.");
+                });
+
+                socket.addEventListener("close", event => {
+                    document.getElementById("socket-state").textContent =
+                        `CLOSED (${event.code})`;
+                    log(`SOCKET: CLOSE code=${event.code}, clean=${event.wasClean}`);
+                });
+            });
+        }
+
+        function transport(direction, bytes, label) {
+            return new Promise((resolve, rejectPromise) => {
+                requestCounter += 1;
+                const requestId = `phase4e-${Date.now()}-${requestCounter}`;
+                const envelope = {
+                    kind: "phase4e",
+                    requestId,
+                    direction,
+                    label,
+                    frameBase64: bytesToBase64(bytes)
+                };
+
+                const timeoutId = setTimeout(() => {
+                    pending.delete(requestId);
+                    rejectPromise(new Error(`Timeout esperando eco para ${label}`));
+                }, 6000);
+
+                pending.set(requestId, {
+                    resolve,
+                    reject: rejectPromise,
+                    timeoutId
+                });
+
+                socket.send(JSON.stringify(envelope));
+                transportedCount += 1;
+                updateUi();
+                log(`TX ${direction} ${label}`);
+            });
+        }
+
+        async function runStep(index, direction, bytes) {
+            const decoded = decodeFrame(bytes);
+            document.getElementById(`step-stream-${index}`).textContent =
+                String(decoded.streamId);
+
+            const { result } = await transport(direction, bytes, STEPS[index].label);
+
+            document.getElementById(`step-result-${index}`).textContent =
+                result.accepted ? "ACCEPT" : "REJECT";
+            document.getElementById(`step-reason-${index}`).textContent = result.reason;
+
+            log(
+                `STEP ${index + 1}: ${result.accepted ? "ACCEPT" : "REJECT"} → ${result.reason}`
+            );
+
+            return result;
+        }
+
+        async function runHandshakeScenario() {
+            if (running) return;
+            running = true;
+            resetStateOnly();
+            document.getElementById("result").textContent = "En progreso";
+
+            try {
+                await ensureSocket();
+
+                // 1) Debe fallar: CONNECT antes de completar handshake.
+                await runStep(
+                    0,
+                    "C→S",
+                    encodeConnect(7, "example.com", 443)
+                );
+
+                // 2) Debe fallar: INFO de handshake usando stream != 0.
+                await runStep(
+                    1,
+                    "S→C",
+                    encodeInfo(7, 2, 1)
+                );
+
+                // 3) Server INFO válido.
+                await runStep(
+                    2,
+                    "S→C",
+                    encodeInfo(0, 2, 1)
+                );
+
+                // 4) Client INFO válido.
+                const clientInfoResult = await runStep(
+                    3,
+                    "C→S",
+                    encodeInfo(0, 2, 1)
+                );
+
+                if (clientInfoResult.accepted) {
+                    clientState = "WAIT_SERVER_CONTINUE";
+                    updateUi();
+                    log("CLIENT: INFO enviado; ahora espera CONTINUE/CLOSE del servidor.");
+                }
+
+                // 5) Server acepta handshake con CONTINUE stream=0.
+                await runStep(
+                    4,
+                    "S→C",
+                    encodeContinue(0, 8)
+                );
+
+                // 6) Ya en READY, CONNECT sí es aceptado por el mock server.
+                await runStep(
+                    5,
+                    "C→S",
+                    encodeConnect(7, "example.com", 443)
+                );
+
+                const observed = Array.from({ length: STEPS.length }, (_, i) =>
+                    document.getElementById(`step-result-${i}`).textContent
+                );
+
+                const allExpected = STEPS.every(
+                    (step, i) => observed[i] === step.expected
+                );
+
+                if (
+                    allExpected &&
+                    clientState === "READY" &&
+                    serverState === "READY" &&
+                    stream7State === "OPEN (simulado)" &&
+                    acceptedCount === 4 &&
+                    rejectedCount === 2
+                ) {
+                    document.getElementById("result").textContent =
+                        "OK: handshake validado; 4 ACCEPT / 2 REJECT";
+                    log("HANDSHAKE: escenario completado correctamente.");
+                } else {
+                    document.getElementById("result").textContent =
+                        "Resultado inesperado; revisar tabla y log";
+                    log("HANDSHAKE: la secuencia terminó con un estado inesperado.");
+                }
+            } catch (error) {
+                document.getElementById("result").textContent = `ERROR: ${error.message}`;
+                log(`ERROR: ${error.message}`);
+            } finally {
+                running = false;
+            }
+        }
+
+        function resetStateOnly() {
+            transportedCount = 0;
+            acceptedCount = 0;
+            rejectedCount = 0;
+            clientState = "WAIT_SERVER_INFO";
+            serverState = "WAIT_CLIENT_INFO";
+            stream7State = "NEW";
+            document.getElementById("decoded").textContent = "Sin frames.";
+            renderSteps();
+            updateUi();
+        }
+
+        function resetLab() {
+            for (const waiter of pending.values()) {
+                clearTimeout(waiter.timeoutId);
+                waiter.reject(new Error("Laboratorio reiniciado"));
+            }
+            pending.clear();
+
+            if (socket && (
+                socket.readyState === WebSocket.CONNECTING ||
+                socket.readyState === WebSocket.OPEN
+            )) {
+                socket.close(1000, "Lab reset");
+            }
+
+            socket = null;
+            physicalConnections = 0;
+            requestCounter = 0;
+            document.getElementById("socket-state").textContent = "No conectado";
+            document.getElementById("result").textContent = "No probado";
+            document.getElementById("log").textContent = "";
+            resetStateOnly();
+            log("Fase 4E reiniciada.");
+        }
+
+        renderSteps();
+        updateUi();
+        log("Fase 4E lista. No hay conexiones activas.");
+    </script>
+</body>
+</html>
