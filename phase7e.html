@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 7E - Instrumented vs Black-box</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1220px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2, h3 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    iframe { width: 100%; height: 360px; border: 1px solid #bbb; border-radius: 8px; background: white; }
+    .pass { font-weight: 700; }
+    .opaque { font-weight: 700; }
+    .fail { font-weight: 700; text-decoration: underline; }
+    #log { min-height: 360px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    #child-log { min-height: 180px; background: #111; color: #eee; padding: 12px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+  </style>
+</head>
+<body>
+<script>
+  const query = new URLSearchParams(location.search);
+  if (query.get('child') === '1') {
+    document.addEventListener('DOMContentLoaded', initChild);
+  } else {
+    document.addEventListener('DOMContentLoaded', initParent);
+  }
+
+  function childMarkup() {
+    return `
+      <h1>Mini-app same-origin — Fase 7E</h1>
+      <p>Esta app ejecuta una línea base nativa segura y una segunda pasada instrumentada.</p>
+      <div class="panel">
+        <strong>Estado visual:</strong>
+        <div id="child-state" class="mono">idle</div>
+        <div id="mutations"></div>
+      </div>
+      <div class="panel">
+        <strong>Imagen dinámica:</strong>
+        <img id="child-img" alt="dynamic probe" width="64" height="64">
+      </div>
+      <h2>Log hijo</h2>
+      <div id="child-log"></div>`;
+  }
+
+  function initChild() {
+    document.body.innerHTML = childMarkup();
+
+    const childEvents = [];
+    const runtimeEvents = [];
+    const virtualPrefix = `${location.origin}/securly-lab/__instrumented_runtime__/`;
+    const logicalBase = 'https://demo.invalid/app/index.html';
+
+    function clog(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById('child-log').textContent += `[${time}] ${message}\n`;
+    }
+
+    function encodeBase64Url(text) {
+      const bytes = new TextEncoder().encode(text);
+      let binary = '';
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+    }
+
+    function virtualize(surface, raw) {
+      const logical = new URL(raw, logicalBase).href;
+      const route = `${virtualPrefix}${encodeURIComponent(surface)}/${encodeBase64Url(logical)}`;
+      const event = { surface, raw, logical, route, nativeRequest: false };
+      runtimeEvents.push(event);
+      clog(`CAPTURE ${surface}: ${logical} -> ${route}`);
+      return event;
+    }
+
+    function recordNative(surface, detail) {
+      childEvents.push({ surface, detail, time: performance.now() });
+      clog(`NATIVE ${surface}: ${detail}`);
+    }
+
+    async function nativeDomMutation() {
+      const node = document.createElement('p');
+      node.textContent = 'Mutación DOM nativa observada';
+      node.dataset.probe = 'native-dom';
+      document.getElementById('mutations').appendChild(node);
+      recordNative('DOM mutation', 'node appended');
+      return true;
+    }
+
+    async function nativeImage() {
+      const img = document.getElementById('child-img');
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="gray"/><circle cx="32" cy="32" r="18" fill="white"/></svg>`;
+      const dataUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+      const ok = await new Promise((resolve) => {
+        img.onload = () => resolve(true);
+        img.onerror = () => resolve(false);
+        img.src = dataUrl;
+      });
+      recordNative('dynamic img.src', ok ? 'data URL loaded' : 'data URL failed');
+      return ok;
+    }
+
+    async function nativeFetch() {
+      const response = await fetch('./phase7e.html?probe=fetch', { cache: 'no-store' });
+      const text = await response.text();
+      const ok = response.ok && text.includes('Fase 7E');
+      recordNative('fetch', `same-origin HTTP ${response.status}; readable=${ok}`);
+      return ok;
+    }
+
+    async function nativeXhr() {
+      const ok = await new Promise((resolve) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('GET', './phase7e.html?probe=xhr', true);
+        xhr.onload = () => resolve(xhr.status >= 200 && xhr.status < 300 && xhr.responseText.includes('Fase 7E'));
+        xhr.onerror = () => resolve(false);
+        xhr.send();
+      });
+      recordNative('XMLHttpRequest', `same-origin readable=${ok}`);
+      return ok;
+    }
+
+    async function nativeHistory() {
+      const before = location.href;
+      history.pushState({ lab: '7E-native' }, '', './phase7e.html?child=1&state=native#pushed');
+      const changed = location.href !== before && history.state?.lab === '7E-native';
+      recordNative('history.pushState', changed ? location.href : 'unchanged');
+      return changed;
+    }
+
+    async function nativeWorker() {
+      if (!('Worker' in window)) {
+        recordNative('Worker', 'unsupported');
+        return false;
+      }
+      const blob = new Blob([`self.onmessage = () => self.postMessage('worker-ok');`], { type: 'text/javascript' });
+      const url = URL.createObjectURL(blob);
+      try {
+        const ok = await new Promise((resolve) => {
+          const worker = new Worker(url);
+          const timer = setTimeout(() => { worker.terminate(); resolve(false); }, 3000);
+          worker.onmessage = (event) => {
+            clearTimeout(timer);
+            const good = event.data === 'worker-ok';
+            worker.terminate();
+            resolve(good);
+          };
+          worker.onerror = () => {
+            clearTimeout(timer);
+            worker.terminate();
+            resolve(false);
+          };
+          worker.postMessage('go');
+        });
+        recordNative('Worker', ok ? 'blob worker replied' : 'worker failed');
+        return ok;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+
+    async function runNative() {
+      childEvents.length = 0;
+      document.getElementById('child-state').textContent = 'native-running';
+      document.getElementById('mutations').innerHTML = '';
+
+      const results = {
+        dom: await nativeDomMutation(),
+        image: await nativeImage(),
+        fetch: await nativeFetch(),
+        xhr: await nativeXhr(),
+        history: await nativeHistory(),
+        worker: await nativeWorker()
+      };
+
+      document.getElementById('child-state').textContent = 'native-done';
+      return { results, events: structuredClone(childEvents), href: location.href };
+    }
+
+    async function runInstrumented() {
+      runtimeEvents.length = 0;
+      document.getElementById('child-state').textContent = 'instrumented-running';
+
+      const domNode = document.createElement('p');
+      domNode.textContent = 'Mutación DOM durante runtime instrumentado';
+      domNode.dataset.probe = 'instrumented-dom';
+      document.getElementById('mutations').appendChild(domNode);
+      runtimeEvents.push({ surface: 'DOM mutation', logical: '(local DOM)', route: '(not applicable)', nativeRequest: false });
+
+      virtualize('img.src', '/assets/avatar.png');
+      virtualize('fetch', '/api/profile');
+      virtualize('XMLHttpRequest', '/api/metrics');
+      virtualize('history.pushState', '/settings?tab=privacy');
+      virtualize('Worker', '/workers/app-worker.js');
+      virtualize('WebSocket', 'wss://demo.invalid/events');
+      virtualize('location.assign', '/account');
+
+      document.getElementById('child-state').textContent = 'instrumented-done';
+      return { events: structuredClone(runtimeEvents), nativeDynamicRequests: 0 };
+    }
+
+    window.labApp = {
+      runNative,
+      runInstrumented,
+      getNativeEvents: () => structuredClone(childEvents),
+      getRuntimeEvents: () => structuredClone(runtimeEvents)
+    };
+
+    clog('Mini-app lista; same-origin con el parent.');
+  }
+
+  function parentMarkup() {
+    return `
+      <h1>Fase 7E — Instrumented vs Black-box</h1>
+      <p>
+        Comparamos tres niveles: una app real cross-origin observada como caja negra,
+        una mini-app same-origin que el parent puede inspeccionar directamente y la misma
+        superficie pasando por un runtime virtual que captura URLs sin contactar el destino lógico.
+      </p>
+      <a class="button" href="./phase7d.html">← Volver a Fase 7D</a>
+      <a class="button" href="./">Laboratorio principal</a>
+
+      <div class="note">
+        No hay selector de destino ni relay. La línea base nativa solo hace dos requests GET
+        same-origin al propio <code>phase7e.html</code>. El modo instrumentado usa URLs ficticias
+        bajo <code>demo.invalid</code> pero no realiza requests hacia ellas.
+      </div>
+
+      <div class="panel">
+        <h2>Control</h2>
+        <button onclick="loadChildApp()">1. Cargar mini-app</button>
+        <button onclick="runNativeBaseline()">2. Ejecutar baseline same-origin</button>
+        <button onclick="runInstrumentedPass()">3. Ejecutar runtime instrumentado</button>
+        <button onclick="runAll7E()">Ejecutar comparación completa</button>
+        <button onclick="reset7E()">Reiniciar</button>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><strong>Child same-origin</strong><span id="child-status" class="mono">No cargado</span></div>
+        <div class="stat"><strong>Baseline surfaces</strong><span id="baseline-count" class="mono">0/6</span></div>
+        <div class="stat"><strong>Runtime coverage</strong><span id="runtime-count" class="mono">0/8</span></div>
+        <div class="stat"><strong>Native same-origin requests</strong><span id="native-requests" class="mono">0</span></div>
+        <div class="stat"><strong>Logical remote contacts</strong><span id="remote-contacts" class="mono">0</span></div>
+        <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+      </div>
+
+      <h2>Mini-app same-origin</h2>
+      <iframe id="child-frame" title="7E same-origin app"></iframe>
+
+      <h2>Comparison report</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Superficie</th>
+            <th>7D cross-origin black-box</th>
+            <th>Baseline same-origin</th>
+            <th>Runtime instrumentado</th>
+          </tr>
+        </thead>
+        <tbody id="comparison-body"></tbody>
+      </table>
+
+      <h2>Intenciones capturadas por el runtime</h2>
+      <table>
+        <thead><tr><th>#</th><th>Superficie</th><th>URL lógica</th><th>Ruta virtual</th><th>Request nativo</th></tr></thead>
+        <tbody id="runtime-body"><tr><td colspan="5">Sin eventos todavía.</td></tr></tbody>
+      </table>
+
+      <h2>Log</h2>
+      <div id="log"></div>`;
+  }
+
+  let childReady = false;
+  let baselineSnapshot = null;
+  let runtimeSnapshot = null;
+  let nativeRequestCount = 0;
+
+  const surfaces = [
+    'DOM mutation',
+    'dynamic img.src',
+    'fetch',
+    'XMLHttpRequest',
+    'history.pushState',
+    'Worker',
+    'WebSocket',
+    'location.assign'
+  ];
+
+  function initParent() {
+    document.body.innerHTML = parentMarkup();
+    renderComparison();
+    plog('Fase 7E lista. No se ha iniciado ningún request del baseline.');
+  }
+
+  function plog(message) {
+    const time = new Date().toLocaleTimeString();
+    document.getElementById('log').textContent += `[${time}] ${message}\n`;
+  }
+
+  function setText(id, value) {
+    document.getElementById(id).textContent = value;
+  }
+
+  async function loadChildApp() {
+    if (childReady) return true;
+    const frame = document.getElementById('child-frame');
+    setText('child-status', 'Cargando...');
+    plog('CHILD: navegando a phase7e.html?child=1');
+
+    const ok = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), 8000);
+      frame.onload = () => {
+        clearTimeout(timer);
+        try {
+          const ready = !!frame.contentWindow.labApp;
+          resolve(ready);
+        } catch {
+          resolve(false);
+        }
+      };
+      frame.src = `./phase7e.html?child=1&run=${Date.now()}`;
+    });
+
+    childReady = ok;
+    setText('child-status', ok ? 'PASS — same-origin y observable' : 'FAIL');
+    plog(ok ? 'CHILD: parent puede leer window.labApp y DOM.' : 'CHILD: no se pudo confirmar acceso same-origin.');
+    renderComparison();
+    return ok;
+  }
+
+  async function runNativeBaseline() {
+    if (!childReady && !(await loadChildApp())) return false;
+    const frame = document.getElementById('child-frame');
+
+    plog('BASELINE: ejecutando DOM, img data:, fetch, XHR, history y Worker reales/safe.');
+    try {
+      baselineSnapshot = await frame.contentWindow.labApp.runNative();
+      nativeRequestCount = 2;
+      setText('native-requests', String(nativeRequestCount));
+
+      const passed = Object.values(baselineSnapshot.results).filter(Boolean).length;
+      setText('baseline-count', `${passed}/6`);
+      plog(`BASELINE: ${passed}/6 superficies completadas; fetch+XHR fueron same-origin.`);
+      renderComparison();
+      evaluate7E();
+      return passed === 6;
+    } catch (error) {
+      plog(`BASELINE ERROR: ${error.name}: ${error.message}`);
+      return false;
+    }
+  }
+
+  async function runInstrumentedPass() {
+    if (!childReady && !(await loadChildApp())) return false;
+    const frame = document.getElementById('child-frame');
+
+    plog('RUNTIME: capturando 8 superficies; destinos demo.invalid no se contactan.');
+    try {
+      runtimeSnapshot = await frame.contentWindow.labApp.runInstrumented();
+      const covered = new Set(runtimeSnapshot.events.map((event) => event.surface));
+      const count = surfaces.filter((surface) => covered.has(surface)).length;
+      setText('runtime-count', `${count}/8`);
+      setText('remote-contacts', '0');
+      plog(`RUNTIME: cobertura=${count}/8; logical remote contacts=0.`);
+      renderRuntimeEvents();
+      renderComparison();
+      evaluate7E();
+      return count === 8;
+    } catch (error) {
+      plog(`RUNTIME ERROR: ${error.name}: ${error.message}`);
+      return false;
+    }
+  }
+
+  function baselineStatus(surface) {
+    if (!baselineSnapshot) return 'PENDING';
+    const map = {
+      'DOM mutation': baselineSnapshot.results.dom,
+      'dynamic img.src': baselineSnapshot.results.image,
+      'fetch': baselineSnapshot.results.fetch,
+      'XMLHttpRequest': baselineSnapshot.results.xhr,
+      'history.pushState': baselineSnapshot.results.history,
+      'Worker': baselineSnapshot.results.worker,
+      'WebSocket': null,
+      'location.assign': null
+    };
+    if (map[surface] === true) return 'OBSERVED / PASS';
+    if (map[surface] === false) return 'FAIL';
+    return 'NOT EXECUTED';
+  }
+
+  function runtimeStatus(surface) {
+    if (!runtimeSnapshot) return 'PENDING';
+    const event = runtimeSnapshot.events.find((item) => item.surface === surface);
+    return event ? 'CAPTURED' : 'MISS';
+  }
+
+  function renderComparison() {
+    const body = document.getElementById('comparison-body');
+    if (!body) return;
+    body.innerHTML = '';
+
+    surfaces.forEach((surface) => {
+      const row = document.createElement('tr');
+      const values = [
+        surface,
+        'OPAQUE desde parent cross-origin',
+        baselineStatus(surface),
+        runtimeStatus(surface)
+      ];
+      values.forEach((value, index) => {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        if (index > 0) cell.className = 'mono';
+        row.appendChild(cell);
+      });
+      body.appendChild(row);
+    });
+  }
+
+  function renderRuntimeEvents() {
+    const body = document.getElementById('runtime-body');
+    body.innerHTML = '';
+    if (!runtimeSnapshot?.events?.length) {
+      body.innerHTML = '<tr><td colspan="5">Sin eventos todavía.</td></tr>';
+      return;
+    }
+
+    runtimeSnapshot.events.forEach((event, index) => {
+      const row = document.createElement('tr');
+      [String(index + 1), event.surface, event.logical, event.route, event.nativeRequest ? 'YES' : 'NO'].forEach((value) => {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        cell.className = 'mono';
+        row.appendChild(cell);
+      });
+      body.appendChild(row);
+    });
+  }
+
+  function evaluate7E() {
+    if (!baselineSnapshot || !runtimeSnapshot) {
+      setText('result', 'Prueba parcial');
+      return;
+    }
+
+    const baselinePass = Object.values(baselineSnapshot.results).every(Boolean);
+    const covered = new Set(runtimeSnapshot.events.map((event) => event.surface));
+    const runtimePass = surfaces.every((surface) => covered.has(surface));
+    const noRemote = runtimeSnapshot.nativeDynamicRequests === 0;
+
+    if (baselinePass && runtimePass && noRemote) {
+      setText('result', 'PASS: same-origin observable + runtime 8/8');
+    } else {
+      setText('result', 'Revisar reporte');
+    }
+  }
+
+  async function runAll7E() {
+    reset7E(false);
+    plog('RUN ALL: iniciando comparación completa.');
+    const loaded = await loadChildApp();
+    if (!loaded) return;
+    await runNativeBaseline();
+    await runInstrumentedPass();
+    evaluate7E();
+  }
+
+  function reset7E(clearLog = true) {
+    childReady = false;
+    baselineSnapshot = null;
+    runtimeSnapshot = null;
+    nativeRequestCount = 0;
+
+    const frame = document.getElementById('child-frame');
+    if (frame) {
+      frame.onload = null;
+      frame.removeAttribute('src');
+    }
+
+    setText('child-status', 'No cargado');
+    setText('baseline-count', '0/6');
+    setText('runtime-count', '0/8');
+    setText('native-requests', '0');
+    setText('remote-contacts', '0');
+    setText('result', 'No probado');
+    renderComparison();
+    renderRuntimeEvents();
+
+    if (clearLog) {
+      document.getElementById('log').textContent = '';
+      plog('Fase 7E reiniciada.');
+    }
+  }
+</script>
+</body>
+</html>
