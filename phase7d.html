@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 7D - Página real con JavaScript en black-box</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1200px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2, h3 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    iframe { width: 100%; height: 560px; border: 1px solid #bbb; border-radius: 8px; background: white; }
+    .pass { font-weight: 700; }
+    .opaque { font-weight: 700; }
+    .fail { font-weight: 700; text-decoration: underline; }
+    #log { min-height: 360px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Fase 7D — Página real + JavaScript como black-box</h1>
+
+  <p>
+    Esta fase carga <code>https://www.wikipedia.org/</code> como una aplicación real dentro de
+    un iframe. A diferencia de 7B y 7C, no intentamos separar artificialmente documento y runtime:
+    dejamos que el sitio ejecute su propio JavaScript y observamos qué puede ver —y qué no puede ver—
+    el laboratorio desde otro origen.
+  </p>
+
+  <a class="button" href="./phase7c.html">← Volver a Fase 7C</a>
+  <a class="button" href="https://www.wikipedia.org/" target="_blank" rel="noopener noreferrer">Abrir Wikipedia directamente</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    Destino fijo y benigno. No hay selector de URL, relay, Wisp ni inyección dentro del iframe.
+    El harness inicia únicamente la navegación a Wikipedia; cualquier request adicional pertenece
+    al propio sitio y queda fuera de la visibilidad del origen del laboratorio.
+  </div>
+
+  <div class="panel">
+    <h2>Probes automáticos</h2>
+    <button onclick="runAutomaticProbes()">Ejecutar probes automáticos</button>
+    <button onclick="probeDom()">Probar SOP</button>
+    <button onclick="probePerformance()">Revisar Resource Timing</button>
+    <button onclick="probePostMessage()">Enviar postMessage de prueba</button>
+    <button onclick="resetLab()">Reiniciar</button>
+  </div>
+
+  <div class="panel">
+    <h2>Prueba manual dentro de la página real</h2>
+    <p>
+      Cuando Wikipedia esté cargada, escribe <code>Grounded</code> en su buscador. Si aparecen
+      sugerencias o cambia la interfaz sin recargar el documento, eso es comportamiento dinámico
+      generado por el JavaScript real del sitio.
+    </p>
+    <button onclick="recordDynamicUi(true)">Sí, vi UI dinámica</button>
+    <button onclick="recordDynamicUi(false)">No vi UI dinámica</button>
+    <p>
+      Después puedes enviar la búsqueda. El laboratorio no puede leer la nueva URL cross-origin,
+      pero sí puede contar un nuevo evento <code>load</code> del iframe.
+    </p>
+    <button onclick="checkNavigation()">Comprobar navegación del iframe</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Documento real</strong><span id="doc-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Eventos load</strong><span id="load-count" class="mono">0</span></div>
+    <div class="stat"><strong>DOM legible</strong><span id="dom-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Resource Timing</strong><span id="timing-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>postMessage ACK</strong><span id="message-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>UI dinámica observada</strong><span id="dynamic-status" class="mono">No registrado</span></div>
+    <div class="stat"><strong>Navegación interna</strong><span id="nav-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Requests del harness</strong><span id="harness-requests" class="mono">0</span></div>
+    <div class="stat"><strong>Requests internos del sitio</strong><span class="mono">OPAQUE</span></div>
+    <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+  </div>
+
+  <h2>Wikipedia real</h2>
+  <iframe id="real-app" title="Wikipedia real"></iframe>
+
+  <h2>Compatibility / visibility report</h2>
+  <table>
+    <thead>
+      <tr><th>Superficie</th><th>Estado</th><th>Qué sabemos</th></tr>
+    </thead>
+    <tbody id="report-body"></tbody>
+  </table>
+
+  <h2>Resource Timing visible al parent</h2>
+  <table>
+    <thead>
+      <tr><th>name</th><th>initiatorType</th><th>duration</th><th>transferSize</th></tr>
+    </thead>
+    <tbody id="timing-body"><tr><td colspan="4">Sin datos.</td></tr></tbody>
+  </table>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const PAGE_URL = "https://www.wikipedia.org/";
+    const PAGE_ORIGIN = "https://www.wikipedia.org";
+
+    let harnessRequests = 0;
+    let loadCount = 0;
+    let firstLoadResolved = false;
+    let dynamicUi = null;
+    let messageAck = false;
+    let messageListenerInstalled = false;
+
+    const statuses = {
+      document: "PENDING",
+      sop: "PENDING",
+      timing: "PENDING",
+      postMessage: "PENDING",
+      dynamic: "PENDING",
+      navigation: "PENDING",
+      internalRequests: "OPAQUE"
+    };
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById("log").textContent += `[${time}] ${message}\n`;
+    }
+
+    function setText(id, value) {
+      document.getElementById(id).textContent = value;
+    }
+
+    function updateReport() {
+      const rows = [
+        ["Documento", statuses.document, "El parent puede observar el evento load del iframe."],
+        ["DOM interno", statuses.sop, "SOP debe impedir leer document, location y estado JS del iframe."],
+        ["Resource Timing", statuses.timing, "El parent puede recibir metadatos limitados de recursos que él inicia; no obtiene un inventario del tráfico interno del iframe."],
+        ["postMessage", statuses.postMessage, "Solo existe visibilidad cooperativa si la página remota implementa un protocolo de mensajes y responde."],
+        ["UI dinámica", statuses.dynamic, "Observación visual/manual del JavaScript real ejecutándose dentro de Wikipedia."],
+        ["Navegación interna", statuses.navigation, "Un segundo load permite observar transición de documento sin conocer la URL cross-origin."],
+        ["Requests internos", "OPAQUE", "El parent no puede enumerar fetch/XHR/scripts/subrecursos iniciados dentro del contexto cross-origin."]
+      ];
+
+      const body = document.getElementById("report-body");
+      body.innerHTML = "";
+      rows.forEach(([surface, status, meaning]) => {
+        const row = document.createElement("tr");
+        const values = [surface, status, meaning];
+        values.forEach((value, index) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          if (index === 1) {
+            cell.className = status === "PASS" ? "pass mono" : status === "FAIL" ? "fail mono" : "opaque mono";
+          }
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+
+      evaluateResult();
+    }
+
+    function evaluateResult() {
+      if (statuses.document === "PASS" && statuses.sop === "PASS") {
+        if (statuses.dynamic === "PASS") {
+          setText("result", "BLACK-BOX PASS: JS real funciona, parent sigue aislado");
+        } else {
+          setText("result", "Parcial: aislamiento validado; falta observación dinámica manual");
+        }
+      } else if (statuses.document === "FAIL") {
+        setText("result", "FAIL: la página real no cargó");
+      } else {
+        setText("result", "Prueba en curso");
+      }
+    }
+
+    function ensureMessageListener() {
+      if (messageListenerInstalled) return;
+      messageListenerInstalled = true;
+      window.addEventListener("message", (event) => {
+        if (event.origin !== PAGE_ORIGIN) return;
+        messageAck = true;
+        statuses.postMessage = "PASS — mensaje recibido";
+        setText("message-status", "ACK / mensaje recibido");
+        log(`MESSAGE: recibido desde ${event.origin}; comunicación cooperativa existe.`);
+        updateReport();
+      });
+    }
+
+    async function loadRealPage() {
+      const frame = document.getElementById("real-app");
+      if (loadCount > 0) return true;
+
+      harnessRequests += 1;
+      setText("harness-requests", String(harnessRequests));
+      setText("doc-status", "Cargando...");
+      log(`DOC: navegación iniciada por harness → ${PAGE_URL}`);
+
+      return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          if (firstLoadResolved) return;
+          firstLoadResolved = true;
+          statuses.document = "FAIL";
+          setText("doc-status", "FAIL / timeout");
+          log("DOC: timeout esperando load.");
+          updateReport();
+          resolve(false);
+        }, 12000);
+
+        frame.onload = () => {
+          loadCount += 1;
+          setText("load-count", String(loadCount));
+          log(`IFRAME: evento load #${loadCount}.`);
+
+          if (loadCount === 1 && !firstLoadResolved) {
+            firstLoadResolved = true;
+            clearTimeout(timeout);
+            statuses.document = "PASS";
+            setText("doc-status", "PASS — load");
+            updateReport();
+            resolve(true);
+          } else if (loadCount > 1) {
+            statuses.navigation = "PASS";
+            setText("nav-status", `PASS — load #${loadCount}`);
+            updateReport();
+          }
+        };
+
+        frame.src = PAGE_URL;
+      });
+    }
+
+    async function probeDom() {
+      if (loadCount === 0) await loadRealPage();
+      const frame = document.getElementById("real-app");
+
+      try {
+        const title = frame.contentWindow.document.title;
+        statuses.sop = "FAIL";
+        setText("dom-status", `SÍ — ${title || "sin título"}`);
+        log(`SOP: DOM fue legible inesperadamente; title=${JSON.stringify(title)}.`);
+      } catch (error) {
+        statuses.sop = "PASS";
+        setText("dom-status", "NO — bloqueado por SOP");
+        log(`SOP: acceso a document bloqueado → ${error.name}: ${error.message}`);
+      }
+
+      updateReport();
+      return statuses.sop === "PASS";
+    }
+
+    function probePerformance() {
+      const entries = performance.getEntriesByType("resource")
+        .filter((entry) => entry.name.includes("wikipedia.org"));
+
+      const body = document.getElementById("timing-body");
+      body.innerHTML = "";
+
+      if (!entries.length) {
+        body.innerHTML = '<tr><td colspan="4">No hay ResourceTiming de wikipedia.org visible al parent.</td></tr>';
+        statuses.timing = "OPAQUE / sin entradas";
+        setText("timing-status", "OPAQUE / ninguna entrada");
+        log("TIMING: el parent no recibió entradas ResourceTiming de Wikipedia.");
+      } else {
+        entries.forEach((entry) => {
+          const row = document.createElement("tr");
+          [entry.name, entry.initiatorType, entry.duration.toFixed(1), String(entry.transferSize)].forEach((value) => {
+            const cell = document.createElement("td");
+            cell.textContent = value;
+            cell.className = "mono";
+            row.appendChild(cell);
+          });
+          body.appendChild(row);
+        });
+        statuses.timing = `LIMITED — ${entries.length} entrada(s)`;
+        setText("timing-status", `LIMITED (${entries.length})`);
+        log(`TIMING: ${entries.length} entrada(s) visibles; no representan el tráfico interno completo del iframe.`);
+      }
+
+      updateReport();
+      return entries.length;
+    }
+
+    async function probePostMessage() {
+      if (loadCount === 0) await loadRealPage();
+      ensureMessageListener();
+      messageAck = false;
+      statuses.postMessage = "WAITING";
+      setText("message-status", "Esperando 2 s...");
+      updateReport();
+
+      const frame = document.getElementById("real-app");
+      frame.contentWindow.postMessage({ type: "securly-lab-7d-ping", purpose: "visibility-test" }, PAGE_ORIGIN);
+      log("MESSAGE: ping cooperativo enviado. No concede acceso al DOM ni exige respuesta.");
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      if (!messageAck) {
+        statuses.postMessage = "OPAQUE — sin protocolo cooperativo";
+        setText("message-status", "Sin ACK");
+        log("MESSAGE: sin respuesta. Esto es normal si Wikipedia no implementa nuestro protocolo de prueba.");
+      }
+      updateReport();
+      return messageAck;
+    }
+
+    function recordDynamicUi(value) {
+      dynamicUi = value;
+      statuses.dynamic = value ? "PASS" : "NOT OBSERVED";
+      setText("dynamic-status", value ? "PASS — observada" : "No observada");
+      log(`MANUAL: UI dinámica ${value ? "observada" : "no observada"}.`);
+      updateReport();
+    }
+
+    function checkNavigation() {
+      if (loadCount > 1) {
+        statuses.navigation = "PASS";
+        setText("nav-status", `PASS — ${loadCount} loads`);
+        log(`NAV: se observaron ${loadCount} eventos load; hubo al menos una navegación posterior.`);
+      } else {
+        statuses.navigation = "NOT OBSERVED";
+        setText("nav-status", "No observada todavía");
+        log("NAV: solo existe el load inicial. Envía una búsqueda dentro del iframe y vuelve a comprobar.");
+      }
+      updateReport();
+    }
+
+    async function runAutomaticProbes() {
+      resetLab(false);
+      ensureMessageListener();
+      log("RUN: iniciando probes automáticos 7D.");
+      const loaded = await loadRealPage();
+      if (!loaded) return;
+      await probeDom();
+      probePerformance();
+      await probePostMessage();
+      log("RUN: probes automáticos terminados. Ahora prueba la UI dentro del iframe y registra la observación.");
+    }
+
+    function resetLab(clearLog = true) {
+      const frame = document.getElementById("real-app");
+      frame.removeAttribute("src");
+      frame.onload = null;
+
+      harnessRequests = 0;
+      loadCount = 0;
+      firstLoadResolved = false;
+      dynamicUi = null;
+      messageAck = false;
+
+      statuses.document = "PENDING";
+      statuses.sop = "PENDING";
+      statuses.timing = "PENDING";
+      statuses.postMessage = "PENDING";
+      statuses.dynamic = "PENDING";
+      statuses.navigation = "PENDING";
+      statuses.internalRequests = "OPAQUE";
+
+      setText("doc-status", "No probado");
+      setText("load-count", "0");
+      setText("dom-status", "No probado");
+      setText("timing-status", "No probado");
+      setText("message-status", "No probado");
+      setText("dynamic-status", "No registrado");
+      setText("nav-status", "No probado");
+      setText("harness-requests", "0");
+      setText("result", "No probado");
+      document.getElementById("timing-body").innerHTML = '<tr><td colspan="4">Sin datos.</td></tr>';
+      updateReport();
+
+      if (clearLog) {
+        document.getElementById("log").textContent = "";
+        log("Fase 7D lista. Todavía no se ha iniciado ninguna navegación externa.");
+      }
+    }
+
+    ensureMessageListener();
+    resetLab();
+  </script>
+</body>
+</html>
