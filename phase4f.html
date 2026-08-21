@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 4F - Control de flujo Wisp</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 1050px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.5;
+        }
+        h1, h2, h3 { margin-bottom: 10px; }
+        .note {
+            background: #f6f6f6;
+            padding: 12px;
+            border-left: 4px solid #999999;
+            margin: 15px 0;
+        }
+        .panel {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        button, a.button {
+            display: inline-block;
+            margin: 5px 5px 5px 0;
+            padding: 10px 16px;
+            border: 1px solid #999999;
+            border-radius: 4px;
+            background: #ffffff;
+            color: #111111;
+            text-decoration: none;
+            cursor: pointer;
+            font: inherit;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0 25px;
+        }
+        th, td {
+            border: 1px solid #cccccc;
+            padding: 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th { background: #f4f4f4; }
+        code, .mono {
+            font-family: monospace;
+            word-break: break-all;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .stat {
+            background: #f4f4f4;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .stat strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .state-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 12px;
+        }
+        .state-card {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+            padding: 14px;
+        }
+        #log {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #111111;
+            color: #eeeeee;
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 340px;
+            font-family: monospace;
+        }
+        .frame-box {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #f8f8f8;
+            padding: 12px;
+            border-radius: 6px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>Fase 4F — Control de flujo con CONTINUE</h1>
+
+    <p>
+        Esta fase simula el control de flujo de un stream TCP Wisp ya abierto.
+        El servidor anuncia cuántos paquetes DATA puede aceptar con CONTINUE y el
+        cliente mantiene un contador local de créditos. Cuando llega a cero, el
+        cliente debe dejar de transmitir DATA hasta recibir otro CONTINUE.
+    </p>
+
+    <a class="button" href="./phase4e.html">← Volver a Fase 4E</a>
+    <a class="button" href="./">Laboratorio principal</a>
+
+    <div class="note">
+        No se abre ningún socket TCP/UDP real. Los frames Wisp se construyen como
+        bytes, se encapsulan en Base64 para que Postman Echo los transporte como
+        texto y después se procesan mediante cliente/servidor simulados localmente.
+    </div>
+
+    <h2>Secuencia</h2>
+    <div class="frame-box">1. S → C  CONTINUE stream=7, buffer=3      créditos = 3
+2. C → S  DATA "alpha"                     créditos = 2
+3. C → S  DATA "beta"                      créditos = 1
+4. C → S  DATA "gamma"                     créditos = 0
+5. C → S  intento DATA "delta"              BLOQUEADO LOCALMENTE
+6. S → C  CONTINUE stream=7, buffer=2      créditos = 2
+7. C → S  DATA "delta"                     créditos = 1
+8. C → S  DATA "epsilon"                   créditos = 0</div>
+
+    <div class="panel">
+        <h2>Control</h2>
+        <button onclick="runScenario()">Ejecutar control de flujo</button>
+        <button onclick="resetLab()">Reiniciar</button>
+    </div>
+
+    <div class="stats">
+        <div class="stat">
+            <strong>WebSocket físico</strong>
+            <span id="socket-state" class="mono">No conectado</span>
+        </div>
+        <div class="stat">
+            <strong>Conexiones físicas</strong>
+            <span id="physical-count" class="mono">0</span>
+        </div>
+        <div class="stat">
+            <strong>Frames transportados</strong>
+            <span id="transported-count" class="mono">0</span>
+        </div>
+        <div class="stat">
+            <strong>DATA aceptados</strong>
+            <span id="data-count" class="mono">0</span>
+        </div>
+        <div class="stat">
+            <strong>Bloqueos locales</strong>
+            <span id="blocked-count" class="mono">0</span>
+        </div>
+        <div class="stat">
+            <strong>Resultado</strong>
+            <span id="result" class="mono">No probado</span>
+        </div>
+    </div>
+
+    <h2>Estado del stream 7</h2>
+    <div class="state-grid">
+        <div class="state-card">
+            <h3>Cliente</h3>
+            <p>Stream: <span class="mono">OPEN</span></p>
+            <p>Créditos disponibles: <span id="client-credits" class="mono">0</span></p>
+            <p>DATA enviados: <span id="client-data" class="mono">0</span></p>
+        </div>
+        <div class="state-card">
+            <h3>Servidor simulado</h3>
+            <p>Stream: <span class="mono">OPEN</span></p>
+            <p>DATA recibidos: <span id="server-data" class="mono">0</span></p>
+            <p>Último payload: <span id="last-payload" class="mono">—</span></p>
+        </div>
+    </div>
+
+    <h2>Pasos observados</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Acción</th>
+                <th>Transportado</th>
+                <th>Crédito antes</th>
+                <th>Crédito después</th>
+                <th>Resultado</th>
+            </tr>
+        </thead>
+        <tbody id="steps-body"></tbody>
+    </table>
+
+    <h2>Último frame decodificado</h2>
+    <div id="decoded" class="frame-box">Sin frames.</div>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+
+    <script>
+        const WS_URL = "wss://ws.postman-echo.com/raw";
+        const STREAM_ID = 7;
+        const TYPE_DATA = 0x02;
+        const TYPE_CONTINUE = 0x03;
+
+        const textEncoder = new TextEncoder();
+        const textDecoder = new TextDecoder();
+
+        let socket = null;
+        let physicalConnections = 0;
+        let transportedCount = 0;
+        let dataAccepted = 0;
+        let localBlocked = 0;
+        let clientCredits = 0;
+        let clientDataSent = 0;
+        let serverDataReceived = 0;
+        let lastPayload = "—";
+        let requestId = 0;
+        let pending = new Map();
+        let running = false;
+        let observations = [];
+
+        const PLAN = [
+            { kind: "continue", buffer: 3, label: "CONTINUE buffer=3" },
+            { kind: "data", payload: "alpha", label: "DATA alpha" },
+            { kind: "data", payload: "beta", label: "DATA beta" },
+            { kind: "data", payload: "gamma", label: "DATA gamma" },
+            { kind: "data", payload: "delta", label: "Intento DATA delta", expectBlocked: true },
+            { kind: "continue", buffer: 2, label: "CONTINUE buffer=2" },
+            { kind: "data", payload: "delta", label: "DATA delta (reintento)" },
+            { kind: "data", payload: "epsilon", label: "DATA epsilon" }
+        ];
+
+        function log(message) {
+            const output = document.getElementById("log");
+            const time = new Date().toLocaleTimeString();
+            output.textContent += `[${time}] ${message}\n`;
+        }
+
+        function concatBytes(...parts) {
+            const total = parts.reduce((sum, part) => sum + part.length, 0);
+            const result = new Uint8Array(total);
+            let offset = 0;
+            for (const part of parts) {
+                result.set(part, offset);
+                offset += part.length;
+            }
+            return result;
+        }
+
+        function makeHeader(type, streamId) {
+            const header = new Uint8Array(5);
+            const view = new DataView(header.buffer);
+            header[0] = type;
+            view.setUint32(1, streamId, true);
+            return header;
+        }
+
+        function encodeContinue(streamId, bufferRemaining) {
+            const payload = new Uint8Array(4);
+            new DataView(payload.buffer).setUint32(0, bufferRemaining, true);
+            return concatBytes(makeHeader(TYPE_CONTINUE, streamId), payload);
+        }
+
+        function encodeData(streamId, text) {
+            return concatBytes(
+                makeHeader(TYPE_DATA, streamId),
+                textEncoder.encode(text)
+            );
+        }
+
+        function decodeFrame(bytes) {
+            if (bytes.length < 5) {
+                return { valid: false, error: "Frame demasiado corto" };
+            }
+
+            const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            const type = bytes[0];
+            const streamId = view.getUint32(1, true);
+            const payload = bytes.slice(5);
+
+            if (type === TYPE_CONTINUE) {
+                if (payload.length < 4) {
+                    return { valid: false, error: "CONTINUE incompleto" };
+                }
+                return {
+                    valid: true,
+                    type,
+                    typeName: "CONTINUE",
+                    streamId,
+                    bufferRemaining: new DataView(
+                        payload.buffer,
+                        payload.byteOffset,
+                        payload.byteLength
+                    ).getUint32(0, true)
+                };
+            }
+
+            if (type === TYPE_DATA) {
+                return {
+                    valid: true,
+                    type,
+                    typeName: "DATA",
+                    streamId,
+                    text: textDecoder.decode(payload)
+                };
+            }
+
+            return { valid: false, error: `Tipo no esperado: 0x${type.toString(16)}` };
+        }
+
+        function bytesToBase64(bytes) {
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary);
+        }
+
+        function base64ToBytes(base64) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) {
+                bytes[i] = binary.charCodeAt(i);
+            }
+            return bytes;
+        }
+
+        function updateUi() {
+            document.getElementById("physical-count").textContent = String(physicalConnections);
+            document.getElementById("transported-count").textContent = String(transportedCount);
+            document.getElementById("data-count").textContent = String(dataAccepted);
+            document.getElementById("blocked-count").textContent = String(localBlocked);
+            document.getElementById("client-credits").textContent = String(clientCredits);
+            document.getElementById("client-data").textContent = String(clientDataSent);
+            document.getElementById("server-data").textContent = String(serverDataReceived);
+            document.getElementById("last-payload").textContent = lastPayload;
+            renderObservations();
+        }
+
+        function renderObservations() {
+            const body = document.getElementById("steps-body");
+            body.innerHTML = "";
+
+            PLAN.forEach((step, index) => {
+                const obs = observations[index];
+                const row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${step.label}</td>
+                    <td>${obs ? obs.transported : "Pendiente"}</td>
+                    <td>${obs ? obs.before : "—"}</td>
+                    <td>${obs ? obs.after : "—"}</td>
+                    <td>${obs ? obs.result : "Pendiente"}</td>
+                `;
+                body.appendChild(row);
+            });
+        }
+
+        function renderDecoded(frame) {
+            const lines = [
+                `type: ${frame.typeName}`,
+                `streamId: ${frame.streamId}`
+            ];
+            if (frame.typeName === "CONTINUE") {
+                lines.push(`bufferRemaining: ${frame.bufferRemaining}`);
+            }
+            if (frame.typeName === "DATA") {
+                lines.push(`payload: ${frame.text}`);
+            }
+            document.getElementById("decoded").textContent = lines.join("\n");
+        }
+
+        function connectSocket() {
+            return new Promise((resolve, reject) => {
+                socket = new WebSocket(WS_URL);
+                physicalConnections = 1;
+                updateUi();
+
+                const timeout = setTimeout(() => reject(new Error("Timeout abriendo WebSocket")), 8000);
+
+                socket.addEventListener("open", () => {
+                    clearTimeout(timeout);
+                    document.getElementById("socket-state").textContent = "OPEN";
+                    log("SOCKET: OPEN. Se usará una sola conexión física.");
+                    resolve();
+                }, { once: true });
+
+                socket.addEventListener("error", () => {
+                    clearTimeout(timeout);
+                    reject(new Error("Evento error de WebSocket"));
+                }, { once: true });
+
+                socket.addEventListener("close", event => {
+                    document.getElementById("socket-state").textContent = `CLOSED (${event.code})`;
+                    log(`SOCKET: CLOSE code=${event.code}, clean=${event.wasClean}`);
+                });
+
+                socket.addEventListener("message", event => {
+                    let envelope;
+                    try {
+                        envelope = JSON.parse(String(event.data));
+                    } catch {
+                        log("RX: respuesta no pertenece al sobre del laboratorio.");
+                        return;
+                    }
+
+                    const resolver = pending.get(envelope.id);
+                    if (!resolver) return;
+
+                    pending.delete(envelope.id);
+                    resolver(base64ToBytes(envelope.frame));
+                });
+            });
+        }
+
+        function transportFrame(direction, bytes) {
+            return new Promise((resolve, reject) => {
+                const id = ++requestId;
+                const envelope = {
+                    lab: "phase4f",
+                    id,
+                    direction,
+                    frame: bytesToBase64(bytes)
+                };
+
+                const timeout = setTimeout(() => {
+                    pending.delete(id);
+                    reject(new Error(`Timeout esperando eco del frame ${id}`));
+                }, 5000);
+
+                pending.set(id, returnedBytes => {
+                    clearTimeout(timeout);
+                    transportedCount += 1;
+                    updateUi();
+                    resolve(returnedBytes);
+                });
+
+                socket.send(JSON.stringify(envelope));
+            });
+        }
+
+        function processContinue(frame) {
+            if (!frame.valid || frame.type !== TYPE_CONTINUE) {
+                throw new Error("El cliente esperaba CONTINUE válido");
+            }
+            if (frame.streamId !== STREAM_ID) {
+                throw new Error("CONTINUE pertenece a otro stream");
+            }
+
+            clientCredits = frame.bufferRemaining;
+            log(`CLIENT: CONTINUE recibido → créditos=${clientCredits}`);
+            updateUi();
+        }
+
+        function processDataAtServer(frame) {
+            if (!frame.valid || frame.type !== TYPE_DATA) {
+                throw new Error("El servidor esperaba DATA válido");
+            }
+            if (frame.streamId !== STREAM_ID) {
+                throw new Error("DATA pertenece a otro stream");
+            }
+
+            serverDataReceived += 1;
+            dataAccepted += 1;
+            lastPayload = frame.text;
+            log(`SERVER: DATA aceptado → ${frame.text}`);
+            updateUi();
+        }
+
+        async function executeStep(step, index) {
+            const before = clientCredits;
+
+            if (step.kind === "continue") {
+                const bytes = encodeContinue(STREAM_ID, step.buffer);
+                log(`TX S→C CONTINUE buffer=${step.buffer}`);
+                const returned = await transportFrame("S→C", bytes);
+                const frame = decodeFrame(returned);
+                renderDecoded(frame);
+                processContinue(frame);
+
+                observations[index] = {
+                    transported: "Sí",
+                    before,
+                    after: clientCredits,
+                    result: "ACCEPT"
+                };
+                updateUi();
+                return;
+            }
+
+            // Wisp flow control: sin créditos, DATA no debe enviarse.
+            if (clientCredits === 0) {
+                localBlocked += 1;
+                observations[index] = {
+                    transported: "NO",
+                    before,
+                    after: clientCredits,
+                    result: "BLOCK local"
+                };
+                log(`CLIENT: DATA ${step.payload} bloqueado; créditos=0. No llegó al WebSocket.`);
+                updateUi();
+
+                if (!step.expectBlocked) {
+                    throw new Error("Se bloqueó un DATA que debía poder transmitirse");
+                }
+                return;
+            }
+
+            clientCredits -= 1;
+            clientDataSent += 1;
+            updateUi();
+
+            const bytes = encodeData(STREAM_ID, step.payload);
+            log(`TX C→S DATA ${step.payload}; crédito ${before}→${clientCredits}`);
+            const returned = await transportFrame("C→S", bytes);
+            const frame = decodeFrame(returned);
+            renderDecoded(frame);
+            processDataAtServer(frame);
+
+            observations[index] = {
+                transported: "Sí",
+                before,
+                after: clientCredits,
+                result: "ACCEPT"
+            };
+            updateUi();
+        }
+
+        async function runScenario() {
+            if (running) return;
+            running = true;
+            resetState(false);
+            document.getElementById("result").textContent = "En progreso";
+
+            try {
+                await connectSocket();
+
+                for (let i = 0; i < PLAN.length; i++) {
+                    await executeStep(PLAN[i], i);
+                }
+
+                const ok =
+                    physicalConnections === 1 &&
+                    transportedCount === 7 &&
+                    dataAccepted === 5 &&
+                    localBlocked === 1 &&
+                    clientCredits === 0 &&
+                    serverDataReceived === 5 &&
+                    observations[4]?.transported === "NO";
+
+                document.getElementById("result").textContent = ok
+                    ? "OK: backpressure validado"
+                    : "Completado con valores inesperados";
+
+                if (ok) {
+                    log("FLOW CONTROL: OK. El cuarto DATA fue detenido antes del transporte y salió solo tras CONTINUE.");
+                }
+            } catch (error) {
+                document.getElementById("result").textContent = `ERROR: ${error.message}`;
+                log(`ERROR: ${error.message}`);
+            } finally {
+                running = false;
+            }
+        }
+
+        function closeSocket() {
+            if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+                socket.close(1000, "Lab complete");
+            }
+            socket = null;
+            pending.clear();
+        }
+
+        function resetState(clearLog = true) {
+            closeSocket();
+            physicalConnections = 0;
+            transportedCount = 0;
+            dataAccepted = 0;
+            localBlocked = 0;
+            clientCredits = 0;
+            clientDataSent = 0;
+            serverDataReceived = 0;
+            lastPayload = "—";
+            requestId = 0;
+            observations = [];
+
+            document.getElementById("socket-state").textContent = "No conectado";
+            document.getElementById("result").textContent = "No probado";
+            document.getElementById("decoded").textContent = "Sin frames.";
+            if (clearLog) document.getElementById("log").textContent = "";
+            updateUi();
+        }
+
+        function resetLab() {
+            running = false;
+            resetState(true);
+            log("Fase 4F reiniciada.");
+        }
+
+        updateUi();
+        log("Fase 4F lista. Stream 7 se considera ya abierto para estudiar únicamente flow control.");
+    </script>
+</body>
+</html>
