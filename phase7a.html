@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 7A - Página real controlada</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1180px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    textarea { width: 100%; min-height: 170px; box-sizing: border-box; font-family: monospace; }
+    iframe { width: 100%; height: 280px; border: 1px solid #bbb; border-radius: 8px; background: #fff; }
+    #log { min-height: 320px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Fase 7A — Prueba controlada con página real</h1>
+
+  <p>
+    Esta fase usa un único destino público y benigno fijado en
+    <code>https://example.com/</code>. Separamos navegación, lectura desde JavaScript
+    y rewriting para no confundir Same-Origin Policy, CORS y el comportamiento del rewriter.
+  </p>
+
+  <a class="button" href="./phase6d.html">← Volver a Fase 6D</a>
+  <a class="button" href="https://example.com/" target="_blank" rel="noopener noreferrer">Abrir Example Domain directamente</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    Esta fase no es un proxy. No hay selector de destino, Wisp ni relay. Los únicos requests
+    externos que puede generar esta página son los requests directos del navegador a
+    <code>https://example.com/</code> cuando tú ejecutas las pruebas de iframe o fetch.
+  </div>
+
+  <div class="panel">
+    <h2>Control</h2>
+    <button onclick="loadRealFrame()">1. Cargar iframe real</button>
+    <button onclick="testCrossOriginRead()">2. Intentar leer DOM del iframe</button>
+    <button onclick="testRealFetch()">3. Probar fetch real</button>
+    <button onclick="rewriteLocalFixture()">4. Reescribir fixture local</button>
+    <button onclick="runAll()">Ejecutar todo</button>
+    <button onclick="resetLab()">Reiniciar</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Iframe real</strong><span id="frame-status" class="mono">No cargado</span></div>
+    <div class="stat"><strong>DOM cross-origin legible</strong><span id="dom-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>fetch() legible</strong><span id="fetch-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Mappings rewriter</strong><span id="mapping-count" class="mono">0</span></div>
+    <div class="stat"><strong>Requests externos iniciados</strong><span id="request-count" class="mono">0</span></div>
+    <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+  </div>
+
+  <h2>1. Página real en iframe</h2>
+  <iframe id="real-frame" title="Example Domain real"></iframe>
+
+  <h2>2. Resultado de fetch</h2>
+  <table>
+    <tbody>
+      <tr><th>Destino fijo</th><td class="mono">https://example.com/</td></tr>
+      <tr><th>Resultado</th><td id="fetch-result" class="mono">Sin ejecutar.</td></tr>
+      <tr><th>Interpretación</th><td id="fetch-meaning">—</td></tr>
+    </tbody>
+  </table>
+
+  <h2>3. Fixture local representativa</h2>
+  <p>
+    Esta fixture no es la respuesta descargada por el navegador. Es una representación local
+    mínima de la estructura pública de Example Domain para que podamos inspeccionar el rewriter
+    sin necesitar leer el DOM cross-origin.
+  </p>
+  <table>
+    <tbody>
+      <tr><th>Base lógica</th><td class="mono">https://example.com/</td></tr>
+      <tr><th>Enlace externo conocido</th><td class="mono">https://www.iana.org/help/example-domains</td></tr>
+    </tbody>
+  </table>
+
+  <h3>HTML local antes</h3>
+  <textarea id="fixture-before" readonly></textarea>
+
+  <h3>HTML local después</h3>
+  <textarea id="fixture-after" readonly>Sin reescribir.</textarea>
+
+  <h2>Mappings</h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Atributo</th><th>URL lógica</th><th>Ruta same-origin generada</th></tr>
+    </thead>
+    <tbody id="mapping-body"><tr><td colspan="4">Sin mappings.</td></tr></tbody>
+  </table>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const REAL_URL = "https://example.com/";
+    const FIXTURE_BASE = REAL_URL;
+    const REWRITE_PREFIX = `${location.origin}/securly-lab/__real_fixture__/`;
+
+    const FIXTURE_HTML = `<!doctype html>
+<html>
+<head><title>Example Domain fixture</title></head>
+<body>
+  <main>
+    <h1>Example Domain</h1>
+    <p>Representación local mínima para el laboratorio.</p>
+    <a href="https://www.iana.org/help/example-domains">Learn more</a>
+  </main>
+</body>
+</html>`;
+
+    let externalRequestCount = 0;
+    let frameLoadPromise = null;
+    let frameLoaded = false;
+    let mappings = [];
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById("log").textContent += `[${time}] ${message}\n`;
+    }
+
+    function updateRequestCount() {
+      document.getElementById("request-count").textContent = String(externalRequestCount);
+    }
+
+    function encodeBase64Url(text) {
+      const bytes = new TextEncoder().encode(text);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    }
+
+    function rewriteUrl(raw, base, kind) {
+      const absolute = new URL(raw, base).href;
+      const rewritten = REWRITE_PREFIX + encodeBase64Url(absolute);
+      mappings.push({ kind, absolute, rewritten });
+      return rewritten;
+    }
+
+    function loadRealFrame() {
+      const frame = document.getElementById("real-frame");
+
+      if (frameLoaded) {
+        log("IFRAME: ya se recibió un evento load anteriormente.");
+        return Promise.resolve(true);
+      }
+
+      if (frameLoadPromise) return frameLoadPromise;
+
+      document.getElementById("frame-status").textContent = "Cargando...";
+      externalRequestCount += 1;
+      updateRequestCount();
+      log(`IFRAME: navegación real iniciada → ${REAL_URL}`);
+
+      frameLoadPromise = new Promise((resolve) => {
+        const timeoutId = setTimeout(() => {
+          document.getElementById("frame-status").textContent = "Sin load en 10 s";
+          log("IFRAME: timeout esperando evento load. Puede ser política, red o filtro.");
+          frameLoadPromise = null;
+          resolve(false);
+        }, 10000);
+
+        frame.onload = () => {
+          clearTimeout(timeoutId);
+          frameLoaded = true;
+          frameLoadPromise = null;
+          document.getElementById("frame-status").textContent = "Evento load recibido";
+          log("IFRAME: evento load recibido. Esto demuestra navegación, no acceso al DOM.");
+          resolve(true);
+        };
+
+        frame.src = REAL_URL;
+      });
+
+      return frameLoadPromise;
+    }
+
+    async function testCrossOriginRead() {
+      if (!frameLoaded) await loadRealFrame();
+
+      const frame = document.getElementById("real-frame");
+      log("SOP: intentando leer frame.contentWindow.document.title.");
+
+      try {
+        const title = frame.contentWindow.document.title;
+        document.getElementById("dom-status").textContent = `SÍ (${title || "sin título"})`;
+        log(`SOP: lectura permitida inesperadamente; title=${JSON.stringify(title)}.`);
+        return true;
+      } catch (error) {
+        document.getElementById("dom-status").textContent = "NO — bloqueado por Same-Origin Policy";
+        log(`SOP: lectura bloqueada → ${error.name}: ${error.message}`);
+        return false;
+      }
+    }
+
+    async function testRealFetch() {
+      externalRequestCount += 1;
+      updateRequestCount();
+      document.getElementById("fetch-status").textContent = "En curso...";
+      document.getElementById("fetch-result").textContent = "Esperando...";
+      log(`FETCH: request real iniciado → ${REAL_URL}`);
+
+      try {
+        const response = await fetch(REAL_URL, {
+          method: "GET",
+          mode: "cors",
+          credentials: "omit",
+          cache: "no-store"
+        });
+
+        const text = await response.text();
+        document.getElementById("fetch-status").textContent = "SÍ";
+        document.getElementById("fetch-result").textContent = `HTTP ${response.status}; ${text.length} caracteres legibles`;
+        document.getElementById("fetch-meaning").textContent = "El servidor permitió que JavaScript de este origen leyera la respuesta mediante CORS.";
+        log(`FETCH: legible. HTTP ${response.status}; chars=${text.length}.`);
+        return true;
+      } catch (error) {
+        document.getElementById("fetch-status").textContent = "NO";
+        document.getElementById("fetch-result").textContent = `${error.name}: ${error.message}`;
+        document.getElementById("fetch-meaning").textContent = "La navegación al sitio y la lectura de su respuesta con fetch() son permisos diferentes. Un fallo aquí es compatible con CORS/SOP aunque el iframe cargue.";
+        log(`FETCH: no legible → ${error.name}: ${error.message}`);
+        return false;
+      }
+    }
+
+    function rewriteLocalFixture() {
+      mappings = [];
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(FIXTURE_HTML, "text/html");
+
+      for (const element of doc.querySelectorAll("[href]")) {
+        const raw = element.getAttribute("href");
+        element.setAttribute("href", rewriteUrl(raw, FIXTURE_BASE, "href"));
+      }
+
+      for (const element of doc.querySelectorAll("[src]")) {
+        const raw = element.getAttribute("src");
+        element.setAttribute("src", rewriteUrl(raw, FIXTURE_BASE, "src"));
+      }
+
+      const rewritten = `<!doctype html>\n${doc.documentElement.outerHTML}`;
+      document.getElementById("fixture-after").value = rewritten;
+      document.getElementById("mapping-count").textContent = String(mappings.length);
+      renderMappings();
+      log(`REWRITER: fixture local procesada; mappings=${mappings.length}; network=0.`);
+      return mappings.length;
+    }
+
+    function renderMappings() {
+      const body = document.getElementById("mapping-body");
+      body.innerHTML = "";
+
+      if (!mappings.length) {
+        body.innerHTML = '<tr><td colspan="4">Sin mappings.</td></tr>';
+        return;
+      }
+
+      mappings.forEach((mapping, index) => {
+        const row = document.createElement("tr");
+        [String(index + 1), mapping.kind, mapping.absolute, mapping.rewritten].forEach((value) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          cell.classList.add("mono");
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+    }
+
+    async function runAll() {
+      resetLab(false);
+      log("RUN ALL: iniciando 7A.");
+
+      const frameOk = await loadRealFrame();
+      const domReadable = await testCrossOriginRead();
+      const fetchReadable = await testRealFetch();
+      const mappingCount = rewriteLocalFixture();
+
+      const expectedSeparation = frameOk && !domReadable && mappingCount >= 1;
+      document.getElementById("result").textContent = expectedSeparation
+        ? "OK: navegación, SOP/CORS y rewriting quedaron separados"
+        : "Prueba completada; revisar diferencias del entorno";
+
+      log(`RESULT: iframeLoad=${frameOk}; domReadable=${domReadable}; fetchReadable=${fetchReadable}; mappings=${mappingCount}.`);
+    }
+
+    function resetLab(clearLog = true) {
+      const frame = document.getElementById("real-frame");
+      frame.removeAttribute("src");
+      frame.onload = null;
+
+      externalRequestCount = 0;
+      frameLoadPromise = null;
+      frameLoaded = false;
+      mappings = [];
+
+      document.getElementById("frame-status").textContent = "No cargado";
+      document.getElementById("dom-status").textContent = "No probado";
+      document.getElementById("fetch-status").textContent = "No probado";
+      document.getElementById("mapping-count").textContent = "0";
+      document.getElementById("request-count").textContent = "0";
+      document.getElementById("result").textContent = "No probado";
+      document.getElementById("fetch-result").textContent = "Sin ejecutar.";
+      document.getElementById("fetch-meaning").textContent = "—";
+      document.getElementById("fixture-before").value = FIXTURE_HTML;
+      document.getElementById("fixture-after").value = "Sin reescribir.";
+      renderMappings();
+
+      if (clearLog) {
+        document.getElementById("log").textContent = "";
+        log("Fase 7A lista. No se ha iniciado ningún request externo.");
+      }
+    }
+
+    resetLab();
+  </script>
+</body>
+</html>
