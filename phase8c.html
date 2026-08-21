@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 8C - End-to-end architecture & threat model</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1280px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2, h3 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    select { padding: 9px; font: inherit; min-width: 300px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    .confirmed { font-weight: 700; }
+    .observable { font-weight: 700; }
+    .model { font-style: italic; }
+    .runtime { opacity: .82; }
+    #pipeline, #boundary, #log { background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    #pipeline { min-height: 330px; }
+    #boundary { min-height: 170px; }
+    #log { min-height: 240px; }
+  </style>
+</head>
+<body>
+  <h1>Fase 8C — End-to-end architecture & threat model</h1>
+
+  <p>
+    Esta fase junta todo el laboratorio en una sola arquitectura. No ejecuta requests, sockets ni
+    navegación externa: clasifica qué información existe en cada frontera, qué puede virtualizarse
+    dentro del navegador y qué reaparece necesariamente cuando hay comunicación física.
+  </p>
+
+  <a class="button" href="./phase8b.html">← Volver a Fase 8B</a>
+  <a class="button" href="./phase8a.html">Revisar Fase 8A</a>
+  <a class="button" href="./phase7e.html">Revisar Fase 7E</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    Niveles de evidencia: <strong>CONFIRMADO</strong> = observado en este entorno;
+    <strong>OBSERVABLE</strong> = la señal existe en el navegador/red;
+    <strong>MODELO</strong> = un filtro podría usarla, pero no demostramos que Securly lo haga.
+    El objetivo es defensivo: identificar fronteras de visibilidad, no ocultarlas.
+  </div>
+
+  <div class="panel">
+    <h2>Inspeccionar frontera</h2>
+    <select id="stage" onchange="renderStage()">
+      <option value="app">1. Aplicación / URL lógica</option>
+      <option value="rewrite">2. Rewriter</option>
+      <option value="runtime">3. Runtime virtual</option>
+      <option value="sw">4. Service Worker</option>
+      <option value="transport">5. Transport adapter</option>
+      <option value="endpoint">6. Endpoint físico</option>
+      <option value="filter">7. Filtro / egress</option>
+      <option value="internet">8. Internet / destino remoto</option>
+    </select>
+    <button onclick="renderAllBoundaries()">Mostrar todas las fronteras</button>
+    <button onclick="runInvariantAudit()">Auditar invariantes</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Capas modeladas</strong><span class="mono">8</span></div>
+    <div class="stat"><strong>Fronteras principales</strong><span class="mono">7</span></div>
+    <div class="stat"><strong>Señales confirmadas</strong><span id="confirmed-count" class="mono">—</span></div>
+    <div class="stat"><strong>Solo-runtime</strong><span id="runtime-count" class="mono">—</span></div>
+    <div class="stat"><strong>Señales físicas</strong><span id="physical-count" class="mono">—</span></div>
+    <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No auditado</span></div>
+  </div>
+
+  <h2>Pipeline completo</h2>
+  <div id="pipeline"></div>
+
+  <h2>Frontera seleccionada</h2>
+  <div id="boundary"></div>
+
+  <h2>Matriz de información por capa</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Capa</th>
+        <th>URL lógica</th>
+        <th>Ruta reescrita</th>
+        <th>Hostname físico</th>
+        <th>DNS/IP</th>
+        <th>TLS / WSS / HTTPS</th>
+        <th>Patrón de tráfico</th>
+        <th>Evidencia</th>
+      </tr>
+    </thead>
+    <tbody id="layer-body"></tbody>
+  </table>
+
+  <h2>Threat / visibility model</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Señal o propiedad</th>
+        <th>Origen</th>
+        <th>¿Puede quedarse solo en runtime?</th>
+        <th>¿Aparece si hay comunicación remota?</th>
+        <th>Evidencia</th>
+        <th>Conclusión defensiva</th>
+      </tr>
+    </thead>
+    <tbody id="threat-body"></tbody>
+  </table>
+
+  <h2>Invariantes del laboratorio</h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Invariante</th><th>Estado</th><th>Base experimental</th></tr>
+    </thead>
+    <tbody id="invariant-body"></tbody>
+  </table>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const stages = {
+      app: {
+        name: 'Aplicación / URL lógica',
+        visible: ['URL lógica', 'DOM/estado lógico', 'Request intent'],
+        hidden: ['DNS/IP', 'Peer físico si todavía no hay request'],
+        evidence: 'CONFIRMADO por 6B–7E',
+        detail: 'La aplicación puede operar con demo.invalid u otra representación lógica sin que exista todavía tráfico de red.'
+      },
+      rewrite: {
+        name: 'Rewriter',
+        visible: ['URL lógica', 'ruta same-origin calculada', 'mappings HTML/CSS'],
+        hidden: ['DNS/IP remoto si la ruta no se ejecuta'],
+        evidence: 'CONFIRMADO por 5A/5B/7B',
+        detail: 'Transforma representación y referencias; por sí solo no obliga a contactar el host lógico.'
+      },
+      runtime: {
+        name: 'Runtime virtual',
+        visible: ['location lógico', 'Request/Response.url virtual', 'intenciones fetch/XHR/WebSocket/Worker'],
+        hidden: ['Peer remoto cuando nativeRequest=NO'],
+        evidence: 'CONFIRMADO por 6B–6D y 7E',
+        detail: 'Puede conservar state illusion y capturar APIs sin emitir requests físicos.'
+      },
+      sw: {
+        name: 'Service Worker',
+        visible: ['ruta same-origin', 'request del origen controlado', 'mensaje al adapter'],
+        hidden: ['destino lógico si nunca se convierte en peer remoto'],
+        evidence: 'CONFIRMADO por 2, 5B–5D',
+        detail: 'Intercepta dentro del scope del origen. No cambia mágicamente el peer cuando se decide contactar un endpoint remoto.'
+      },
+      transport: {
+        name: 'Transport adapter',
+        visible: ['stream lógico', 'frames/envelopes', 'endpoint físico configurado'],
+        hidden: ['semántica interna si no es inspeccionada por la capa externa'],
+        evidence: 'CONFIRMADO por 4B–4F y 5C/5D',
+        detail: 'Multiplexing y framing cambian el contenido del canal, no el host físico al que Chrome abre la conexión.'
+      },
+      endpoint: {
+        name: 'Endpoint físico',
+        visible: ['hostname físico', 'DNS/IP', 'protocolo de conexión', 'duración/volumen del canal'],
+        hidden: ['URL lógica interna exacta, dependiendo de qué salga por el canal'],
+        evidence: 'OBSERVABLE + bloqueo workers.dev CONFIRMADO',
+        detail: 'Aquí reaparecen señales externas. El peer físico existe aunque el runtime represente destinos lógicos distintos.'
+      },
+      filter: {
+        name: 'Filtro / egress',
+        visible: ['request físico', 'hostname/endpoint disponible para clasificación', 'metadatos de conexión que su despliegue pueda observar'],
+        hidden: ['telemetría interna de Securly para nosotros'],
+        evidence: 'CONFIRMADO: workers.dev → Anonymous proxies; resto = modelo',
+        detail: 'Sabemos que el endpoint workers.dev fue clasificado y bloqueado. No afirmamos qué otras señales concretas usa Securly sin evidencia.'
+      },
+      internet: {
+        name: 'Internet / destino remoto',
+        visible: ['conexión que llegue a ese peer', 'request/aplicación según protocolo'],
+        hidden: ['estado virtual del navegador que nunca salió'],
+        evidence: 'MODELO de red estándar',
+        detail: 'Un destino solo participa si alguna capa física abre realmente una conexión o envía un request hacia él.'
+      }
+    };
+
+    const layers = [
+      ['Aplicación', 'SÍ', 'NO', 'NO', 'NO', 'NO', 'NO', 'CONFIRMADO'],
+      ['Rewriter', 'SÍ', 'SÍ', 'NO', 'NO', 'NO', 'NO', 'CONFIRMADO'],
+      ['Runtime virtual', 'SÍ', 'SÍ', 'NO si no hay native request', 'NO', 'NO', 'NO', 'CONFIRMADO'],
+      ['Service Worker', 'SÍ/decodificable', 'SÍ', 'origen local o adapter', 'solo si conecta', 'solo si conecta', 'solo si conecta', 'CONFIRMADO'],
+      ['Transport adapter', 'indirecta', 'indirecta', 'SÍ: endpoint físico', 'SÍ', 'SÍ', 'SÍ', 'CONFIRMADO/OBSERVABLE'],
+      ['Endpoint físico', 'no necesariamente', 'NO relevante', 'SÍ', 'SÍ', 'SÍ', 'SÍ', 'OBSERVABLE'],
+      ['Filtro / egress', 'no necesariamente', 'NO', 'SÍ cuando el request sale', 'según despliegue', 'según despliegue', 'potencialmente', 'workers.dev CONFIRMADO; resto MODELO'],
+      ['Internet', 'solo si se transmite', 'NO', 'SÍ para el peer contactado', 'SÍ', 'SÍ', 'SÍ', 'MODELO']
+    ];
+
+    const threats = [
+      ['URL lógica virtual', 'Aplicación/runtime', 'SÍ', 'NO por sí sola', 'CONFIRMADO', 'Una cadena que nunca sale a red no crea un hostname que el filtro pueda clasificar.'],
+      ['Ruta reescrita same-origin', 'Rewriter/SW', 'SÍ', 'Solo el origen físico usado', 'CONFIRMADO', 'La representación interna puede diferir de la URL lógica.'],
+      ['Hostname del endpoint físico', 'Stack de red', 'NO', 'SÍ', 'OBSERVABLE + workers.dev CONFIRMADO', 'Es una frontera crítica: para conectar remotamente Chrome necesita un peer.'],
+      ['DNS / IP', 'Resolución/conexión', 'NO si no hay conexión', 'SÍ cuando la arquitectura los requiere', 'OBSERVABLE', 'No afirmamos qué parte exacta ve Securly en esta instalación.'],
+      ['TLS / HTTPS / WSS', 'Conexión', 'NO si no hay conexión', 'SÍ', 'OBSERVABLE', 'El canal físico conserva metadatos de conexión aunque el payload sea distinto.'],
+      ['WebSocket persistente', 'Transport', 'NO', 'SÍ mientras existe', 'WSS permitido CONFIRMADO; uso defensivo MODELO', 'Un filtro puede tratar el endpoint/protocolo como señal; no demostramos que Securly use duración o frecuencia.'],
+      ['Multiplexing / Wisp frames', 'Payload/runtime', 'SÍ conceptualmente', 'El canal físico sigue existiendo', 'CONFIRMADO en mock', 'Cambiar framing no cambia el hostname del peer.'],
+      ['Patrón de tráfico', 'Conexión física', 'NO cuando hay tráfico', 'SÍ como propiedad del canal', 'MODELO', 'Podría ser señal defensiva; no hemos medido que Securly la use.'],
+      ['Categoría / reputación del endpoint', 'Filtro', 'NO', 'Puede aplicarse al endpoint físico', 'workers.dev CONFIRMADO', 'Nuestro relay fue bloqueado como Anonymous proxies antes de ser útil.'],
+      ['State illusion / unrewriting', 'Runtime', 'SÍ', 'NO directamente', 'CONFIRMADO', 'Preserva semántica para la app, no elimina las señales del peer físico.']
+    ];
+
+    const invariants = [
+      ['La navegación permitida no implica fetch legible.', 'PASS', '7A/7B: iframe carga; fetch falla por CORS/SOP.'],
+      ['Un iframe cross-origin puede funcionar y seguir siendo opaco al parent.', 'PASS', '7D: JS real + UI dinámica; DOM bloqueado por SOP.'],
+      ['Una URL lógica puede existir sin generar request físico.', 'PASS', '7E/8A: demo.invalid capturada; contactos remotos = 0.'],
+      ['Rewriting cambia representación, no crea por sí mismo conectividad remota.', 'PASS', '5A/5B/7B.'],
+      ['Multiplexing/framing no cambia el endpoint WebSocket físico.', 'PASS', '4B–4F y 8A.'],
+      ['El endpoint físico puede ser clasificado independientemente del destino lógico.', 'PASS', 'Relay workers.dev bloqueado como Anonymous proxies.'],
+      ['No podemos inferir telemetría interna de Securly solo por el resultado.', 'PASS', '8A/8B separan confirmado, observable y modelo.'],
+      ['Un runtime instrumentado puede capturar APIs sin ejecutar contactos remotos.', 'PASS', '7E: 8/8 coverage, 0 logical remote contacts.']
+    ];
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById('log').textContent += `[${time}] ${message}\n`;
+    }
+
+    function renderPipeline() {
+      document.getElementById('pipeline').textContent = `
+APP / logical state
+  https://demo.invalid/app/index.html
+          │
+          ▼
+REWRITER
+  logical URL → same-origin/internal representation
+          │
+          ▼
+RUNTIME VIRTUAL
+  location / fetch / XHR / WebSocket / Worker / history
+          │
+          ▼
+SERVICE WORKER
+  intercepta rutas bajo el origen controlado
+          │
+          ▼
+TRANSPORT ADAPTER
+  stream / envelope / framing / multiplexing
+          │
+          ▼
+ENDPOINT FÍSICO
+  hostname real + DNS/IP + TLS/HTTPS/WSS + traffic shape
+          │
+          ▼
+FILTRO / EGRESS
+  puede evaluar señales físicas disponibles
+          │
+          ▼
+INTERNET / PEER REMOTO
+
+Frontera clave:
+  virtualización interna ≠ desaparición del endpoint físico
+  cuando una conexión remota realmente existe.`.trim();
+    }
+
+    function renderStage() {
+      const key = document.getElementById('stage').value;
+      const stage = stages[key];
+      document.getElementById('boundary').textContent = [
+        stage.name,
+        '',
+        'Existe aquí:',
+        ...stage.visible.map(v => `  + ${v}`),
+        '',
+        'No necesariamente existe aquí:',
+        ...stage.hidden.map(v => `  - ${v}`),
+        '',
+        `Evidencia: ${stage.evidence}`,
+        '',
+        stage.detail
+      ].join('\n');
+      log(`BOUNDARY: ${stage.name}.`);
+    }
+
+    function renderAllBoundaries() {
+      const text = Object.values(stages).map((stage, i) =>
+        `${i + 1}. ${stage.name}\n   visible: ${stage.visible.join(', ')}\n   evidencia: ${stage.evidence}`
+      ).join('\n\n');
+      document.getElementById('boundary').textContent = text;
+      log('BOUNDARY: mostrando las 8 capas.');
+    }
+
+    function renderLayers() {
+      const body = document.getElementById('layer-body');
+      body.innerHTML = '';
+      layers.forEach(rowData => {
+        const row = document.createElement('tr');
+        rowData.forEach((value, index) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          if (index > 0) cell.className = 'mono';
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+    }
+
+    function renderThreats() {
+      const body = document.getElementById('threat-body');
+      body.innerHTML = '';
+      threats.forEach(rowData => {
+        const row = document.createElement('tr');
+        rowData.forEach((value, index) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          if (index === 4) {
+            cell.className = value.includes('CONFIRMADO') ? 'confirmed mono' : value === 'OBSERVABLE' ? 'observable mono' : 'model mono';
+          }
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+    }
+
+    function renderInvariants() {
+      const body = document.getElementById('invariant-body');
+      body.innerHTML = '';
+      invariants.forEach((entry, index) => {
+        const row = document.createElement('tr');
+        [String(index + 1), ...entry].forEach((value, col) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          if (col === 2) cell.className = 'confirmed mono';
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+    }
+
+    function runInvariantAudit() {
+      const passed = invariants.filter(entry => entry[1] === 'PASS').length;
+      const confirmed = threats.filter(row => row[4].includes('CONFIRMADO')).length;
+      const runtimeOnly = threats.filter(row => row[2] === 'SÍ').length;
+      const physical = threats.filter(row => row[3] === 'SÍ' || row[3].includes('SÍ cuando') || row[3].includes('Puede')).length;
+
+      document.getElementById('confirmed-count').textContent = String(confirmed);
+      document.getElementById('runtime-count').textContent = String(runtimeOnly);
+      document.getElementById('physical-count').textContent = String(physical);
+      document.getElementById('result').textContent = passed === invariants.length
+        ? `PASS: ${passed}/${invariants.length} invariantes consistentes`
+        : `REVISAR: ${passed}/${invariants.length}`;
+
+      log(`AUDIT: invariantes=${passed}/${invariants.length}; confirmedSignals=${confirmed}; runtimeOnly=${runtimeOnly}; physical=${physical}.`);
+      return passed === invariants.length;
+    }
+
+    renderPipeline();
+    renderStage();
+    renderLayers();
+    renderThreats();
+    renderInvariants();
+    log('8C lista. Esta página no inicia requests externos.');
+  </script>
+</body>
+</html>
