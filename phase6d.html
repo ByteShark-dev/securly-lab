@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 6D - State illusion y unrewriting</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1180px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    .box { background: #f7f7f7; border-radius: 8px; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    #log { min-height: 300px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Fase 6D — State illusion / unrewriting</h1>
+
+  <p>
+    Esta fase estudia la dirección inversa del runtime: una aplicación puede escribir una
+    URL lógica que internamente se transforma, pero cuando vuelve a leer el estado no debería
+    ver la ruta interna del laboratorio. Aquí mantenemos ambos estados por separado y probamos
+    seis getters virtuales sin tocar APIs reales del navegador.
+  </p>
+
+  <a class="button" href="./phase6c.html">← Volver a Fase 6C</a>
+  <a class="button" href="./phase6b.html">Revisar Fase 6B</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    No reemplazamos <code>location</code>, <code>Request</code>, <code>Response</code>,
+    <code>WebSocket</code> ni <code>history</code>. Todo ocurre dentro de objetos simulados.
+    Requests reales = 0 y APIs nativas invocadas = 0.
+  </div>
+
+  <div class="panel">
+    <h2>Control</h2>
+    <button onclick="buildState()">1. Construir estado dual</button>
+    <button onclick="runLeakyRead()">2. Leer sin unrewriting</button>
+    <button onclick="runProtectedRead()">3. Activar unrewriting y repetir</button>
+    <button onclick="runAll()">Ejecutar todo</button>
+    <button onclick="resetLab()">Reiniciar</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Getters auditados</strong><span id="total" class="mono">0</span></div>
+    <div class="stat"><strong>Internal leaks</strong><span id="leaks" class="mono">0</span></div>
+    <div class="stat"><strong>Getters protegidos</strong><span id="protected" class="mono">0</span></div>
+    <div class="stat"><strong>APIs nativas invocadas</strong><span class="mono">0</span></div>
+    <div class="stat"><strong>Requests reales</strong><span class="mono">0</span></div>
+    <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+  </div>
+
+  <h2>Estado dual</h2>
+  <table>
+    <tbody>
+      <tr><th>URL lógica</th><td id="logical-url" class="mono">—</td></tr>
+      <tr><th>URL interna</th><td id="internal-url" class="mono">—</td></tr>
+      <tr><th>Origin lógico</th><td id="logical-origin" class="mono">—</td></tr>
+      <tr><th>Origin interno</th><td id="internal-origin" class="mono">—</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Matriz de lectura</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Getter virtual</th>
+        <th>Valor interno almacenado</th>
+        <th>Valor que recibe la app</th>
+        <th>Diagnóstico</th>
+      </tr>
+    </thead>
+    <tbody id="matrix-body">
+      <tr><td colspan="5">Construye el estado y ejecuta una lectura.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Modelo</h2>
+  <div class="box">Escritura:
+logical URL → rewrite → internal URL
+
+Lectura sin protección:
+internal URL → aplicación   ← fuga de abstracción
+
+Lectura con unrewriting:
+internal URL → runtime/unrewrite → logical URL → aplicación</div>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const LOGICAL_URL = "https://demo.invalid/app/index.html?tab=profile#top";
+    const ROUTE_PREFIX = `${location.origin}/securly-lab/__state__/`;
+
+    let state = null;
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById("log").textContent += `[${time}] ${message}\n`;
+    }
+
+    function toBase64Url(text) {
+      const bytes = new TextEncoder().encode(text);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    }
+
+    function buildState() {
+      const logical = new URL(LOGICAL_URL);
+      const internal = new URL(ROUTE_PREFIX + toBase64Url(logical.href));
+
+      state = {
+        logical,
+        internal,
+        request: { logicalUrl: logical.href, internalUrl: internal.href },
+        response: { logicalUrl: logical.href, internalUrl: internal.href },
+        websocket: {
+          logicalUrl: logical.href.replace(/^https:/, "wss:"),
+          internalUrl: internal.href.replace(/^https:/, "wss:")
+        },
+        history: {
+          logicalUrl: logical.href,
+          internalUrl: internal.href,
+          state: { page: "profile", logicalUrl: logical.href }
+        }
+      };
+
+      document.getElementById("logical-url").textContent = state.logical.href;
+      document.getElementById("internal-url").textContent = state.internal.href;
+      document.getElementById("logical-origin").textContent = state.logical.origin;
+      document.getElementById("internal-origin").textContent = state.internal.origin;
+      document.getElementById("result").textContent = "Estado dual listo";
+      log(`STATE logical = ${state.logical.href}`);
+      log(`STATE internal = ${state.internal.href}`);
+      return state;
+    }
+
+    function getCases(protectedMode) {
+      const expose = (logical, internal) => protectedMode ? logical : internal;
+      return [
+        {
+          name: "location.href",
+          internal: state.internal.href,
+          app: expose(state.logical.href, state.internal.href),
+          expected: state.logical.href
+        },
+        {
+          name: "location.origin",
+          internal: state.internal.origin,
+          app: expose(state.logical.origin, state.internal.origin),
+          expected: state.logical.origin
+        },
+        {
+          name: "Request.url",
+          internal: state.request.internalUrl,
+          app: expose(state.request.logicalUrl, state.request.internalUrl),
+          expected: state.request.logicalUrl
+        },
+        {
+          name: "Response.url",
+          internal: state.response.internalUrl,
+          app: expose(state.response.logicalUrl, state.response.internalUrl),
+          expected: state.response.logicalUrl
+        },
+        {
+          name: "WebSocket.url",
+          internal: state.websocket.internalUrl,
+          app: expose(state.websocket.logicalUrl, state.websocket.internalUrl),
+          expected: state.websocket.logicalUrl
+        },
+        {
+          name: "history.currentUrl",
+          internal: state.history.internalUrl,
+          app: expose(state.history.logicalUrl, state.history.internalUrl),
+          expected: state.history.logicalUrl
+        }
+      ];
+    }
+
+    function renderCases(cases, label) {
+      const body = document.getElementById("matrix-body");
+      body.innerHTML = "";
+      let leaks = 0;
+      let protectedCount = 0;
+
+      cases.forEach((item, index) => {
+        const ok = item.app === item.expected;
+        if (ok) protectedCount += 1;
+        else leaks += 1;
+
+        const row = document.createElement("tr");
+        [
+          String(index + 1),
+          item.name,
+          item.internal,
+          item.app,
+          ok ? "OK: vista lógica" : "LEAK: vista interna"
+        ].forEach((value, cellIndex) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          if (cellIndex >= 1) cell.classList.add("mono");
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      });
+
+      document.getElementById("total").textContent = String(cases.length);
+      document.getElementById("leaks").textContent = String(leaks);
+      document.getElementById("protected").textContent = String(protectedCount);
+
+      if (label === "leaky") {
+        document.getElementById("result").textContent = leaks === cases.length
+          ? `Baseline: ${leaks} leaks internos detectados`
+          : `Baseline inesperado: ${leaks} leaks`;
+      } else {
+        document.getElementById("result").textContent = leaks === 0
+          ? "OK: 0 leaks; state illusion consistente"
+          : `Falló: quedan ${leaks} leaks`;
+      }
+
+      log(`${label.toUpperCase()}: total=${cases.length}, leaks=${leaks}, protected=${protectedCount}`);
+    }
+
+    function runLeakyRead() {
+      if (!state) buildState();
+      log("READ baseline: devolviendo directamente el estado interno.");
+      renderCases(getCases(false), "leaky");
+    }
+
+    function runProtectedRead() {
+      if (!state) buildState();
+      log("READ protected: aplicando unrewriting antes de exponer cada getter.");
+      renderCases(getCases(true), "protected");
+    }
+
+    async function runAll() {
+      resetLab(false);
+      buildState();
+      runLeakyRead();
+      await new Promise(resolve => setTimeout(resolve, 400));
+      runProtectedRead();
+    }
+
+    function resetLab(clearLog = true) {
+      state = null;
+      document.getElementById("total").textContent = "0";
+      document.getElementById("leaks").textContent = "0";
+      document.getElementById("protected").textContent = "0";
+      document.getElementById("result").textContent = "No probado";
+      document.getElementById("logical-url").textContent = "—";
+      document.getElementById("internal-url").textContent = "—";
+      document.getElementById("logical-origin").textContent = "—";
+      document.getElementById("internal-origin").textContent = "—";
+      document.getElementById("matrix-body").innerHTML = '<tr><td colspan="5">Construye el estado y ejecuta una lectura.</td></tr>';
+      if (clearLog) {
+        document.getElementById("log").textContent = "";
+        log("Fase 6D lista. No se han invocado APIs reales.");
+      }
+    }
+
+    resetLab();
+  </script>
+</body>
+</html>
