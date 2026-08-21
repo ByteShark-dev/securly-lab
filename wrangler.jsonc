@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+
+  // Nombre del Worker en Cloudflare.
+  "name": "securly-lab",
+
+  // Archivo principal que Cloudflare ejecutará.
+  "main": "worker.js",
+
+  // Fecha de compatibilidad de Workers.
+  "compatibility_date": "2026-08-20",
+
+  // Publicar también en *.workers.dev.
+  "workers_dev": true
+}
