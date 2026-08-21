@@ -5,95 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Fase 5B - Rewriter + Service Worker</title>
     <style>
-        body {
-            font-family: system-ui, sans-serif;
-            max-width: 1100px;
-            margin: 40px auto;
-            padding: 0 20px;
-            line-height: 1.5;
-        }
+        body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
         h1, h2, h3 { margin-bottom: 10px; }
-        .note {
-            background: #f6f6f6;
-            padding: 12px;
-            border-left: 4px solid #999999;
-            margin: 15px 0;
-        }
-        .panel {
-            border: 1px solid #cccccc;
-            border-radius: 8px;
-            padding: 15px;
-            margin: 15px 0;
-        }
-        button, a.button {
-            display: inline-block;
-            margin: 5px 5px 5px 0;
-            padding: 10px 16px;
-            border: 1px solid #999999;
-            border-radius: 4px;
-            background: #ffffff;
-            color: #111111;
-            text-decoration: none;
-            cursor: pointer;
-            font: inherit;
-        }
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .stat {
-            background: #f4f4f4;
-            border-radius: 8px;
-            padding: 12px;
-        }
+        .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999999; margin: 15px 0; }
+        .panel { border: 1px solid #cccccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+        button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999999; border-radius: 4px; background: #ffffff; color: #111111; text-decoration: none; cursor: pointer; font: inherit; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 15px 0; }
+        .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
         .stat strong { display: block; margin-bottom: 5px; }
-        code, .mono {
-            font-family: monospace;
-            word-break: break-all;
-        }
-        .box {
-            background: #f7f7f7;
-            border-radius: 8px;
-            padding: 14px;
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-            font-family: monospace;
-        }
-        .chain {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 10px;
-            margin: 15px 0;
-        }
-        .chain-step {
-            border: 1px solid #cccccc;
-            border-radius: 8px;
-            padding: 12px;
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 15px 0 25px;
-        }
-        th, td {
-            border: 1px solid #cccccc;
-            padding: 10px;
-            text-align: left;
-            vertical-align: top;
-        }
+        code, .mono { font-family: monospace; word-break: break-all; }
+        .box { background: #f7f7f7; border-radius: 8px; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+        .chain { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 15px 0; }
+        .chain-step { border: 1px solid #cccccc; border-radius: 8px; padding: 12px; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+        th, td { border: 1px solid #cccccc; padding: 10px; text-align: left; vertical-align: top; }
         th { background: #f4f4f4; }
-        #log {
-            min-height: 280px;
-            background: #111111;
-            color: #eeeeee;
-            padding: 15px;
-            border-radius: 8px;
-            font-family: monospace;
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-        }
+        #log { min-height: 280px; background: #111111; color: #eeeeee; padding: 15px; border-radius: 8px; font-family: monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     </style>
 </head>
 <body>
@@ -117,22 +44,10 @@
 
     <h2>Cadena que vamos a comprobar</h2>
     <div class="chain">
-        <div class="chain-step">
-            <strong>1. URL lógica</strong>
-            <div class="mono">https://demo.invalid/img/logo.png</div>
-        </div>
-        <div class="chain-step">
-            <strong>2. Rewriter</strong>
-            <div class="mono">/__lab_route__/BASE64URL...</div>
-        </div>
-        <div class="chain-step">
-            <strong>3. Request real</strong>
-            <div class="mono">Chrome → byteshark-dev.github.io</div>
-        </div>
-        <div class="chain-step">
-            <strong>4. Service Worker</strong>
-            <div class="mono">intercepta + decodifica + responde</div>
-        </div>
+        <div class="chain-step"><strong>1. URL lógica</strong><div class="mono">https://demo.invalid/img/logo.png</div></div>
+        <div class="chain-step"><strong>2. Rewriter</strong><div class="mono">/__lab_route__/BASE64URL...</div></div>
+        <div class="chain-step"><strong>3. Request real</strong><div class="mono">Chrome → byteshark-dev.github.io</div></div>
+        <div class="chain-step"><strong>4. Service Worker</strong><div class="mono">intercepta + decodifica + responde</div></div>
     </div>
 
     <div class="panel">
@@ -145,51 +60,21 @@
     </div>
 
     <div class="stats">
-        <div class="stat">
-            <strong>Service Worker</strong>
-            <span id="sw-status" class="mono">No comprobado</span>
-        </div>
-        <div class="stat">
-            <strong>Página controlada</strong>
-            <span id="controlled-status" class="mono">No comprobado</span>
-        </div>
-        <div class="stat">
-            <strong>Host solicitado por Chrome</strong>
-            <span id="browser-host" class="mono">—</span>
-        </div>
-        <div class="stat">
-            <strong>Host lógico recuperado</strong>
-            <span id="logical-host" class="mono">—</span>
-        </div>
-        <div class="stat">
-            <strong>Requests al destino original</strong>
-            <span id="external-count" class="mono">0</span>
-        </div>
-        <div class="stat">
-            <strong>Resultado</strong>
-            <span id="result" class="mono">No probado</span>
-        </div>
+        <div class="stat"><strong>Service Worker</strong><span id="sw-status" class="mono">No comprobado</span></div>
+        <div class="stat"><strong>Página controlada</strong><span id="controlled-status" class="mono">No comprobado</span></div>
+        <div class="stat"><strong>Host solicitado por Chrome</strong><span id="browser-host" class="mono">—</span></div>
+        <div class="stat"><strong>Host lógico recuperado</strong><span id="logical-host" class="mono">—</span></div>
+        <div class="stat"><strong>Requests al destino original</strong><span id="external-count" class="mono">0</span></div>
+        <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
     </div>
 
     <h2>Transformación</h2>
     <table>
         <tbody>
-            <tr>
-                <th>URL relativa de ejemplo</th>
-                <td id="raw-url" class="mono">../img/logo.png</td>
-            </tr>
-            <tr>
-                <th>URL lógica resuelta</th>
-                <td id="absolute-url" class="mono">—</td>
-            </tr>
-            <tr>
-                <th>URL reescrita</th>
-                <td id="rewritten-url" class="mono">—</td>
-            </tr>
-            <tr>
-                <th>¿Qué host ve la petición de Chrome?</th>
-                <td id="request-host" class="mono">—</td>
-            </tr>
+            <tr><th>URL relativa de ejemplo</th><td id="raw-url" class="mono">../img/logo.png</td></tr>
+            <tr><th>URL lógica resuelta</th><td id="absolute-url" class="mono">—</td></tr>
+            <tr><th>URL reescrita</th><td id="rewritten-url" class="mono">—</td></tr>
+            <tr><th>¿Qué host ve la petición de Chrome?</th><td id="request-host" class="mono">—</td></tr>
         </tbody>
     </table>
 
@@ -207,6 +92,7 @@
 
         let rewrittenUrl = "";
         let swReady = false;
+        let activeSwInfo = null;
 
         function log(message) {
             const time = new Date().toLocaleTimeString();
@@ -220,15 +106,8 @@
         function bytesToBase64Url(text) {
             const bytes = new TextEncoder().encode(text);
             let binary = "";
-
-            for (const byte of bytes) {
-                binary += String.fromCharCode(byte);
-            }
-
-            return btoa(binary)
-                .replaceAll("+", "-")
-                .replaceAll("/", "_")
-                .replaceAll("=", "");
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
         }
 
         function buildRewrittenUrl() {
@@ -246,21 +125,21 @@
             log(`RESOLVE: ${absolute}`);
             log(`BROWSER URL: ${rewrittenUrl}`);
             log(`BROWSER HOST: ${parsed.host}`);
-
             return rewrittenUrl;
         }
 
         async function probeActiveWorker() {
             try {
-                const response = await fetch(
-                    `./lab-message?phase=5b&t=${Date.now()}`,
-                    { cache: "no-store" }
-                );
-
+                const response = await fetch(`./lab-message?phase=5b&t=${Date.now()}`, { cache: "no-store" });
                 if (!response.ok) return false;
 
                 const data = await response.json();
-                return data.source === "service-worker" && data.swVersion === "5B";
+                const supports5B = data.source === "service-worker" &&
+                    Array.isArray(data.swFeatures) &&
+                    data.swFeatures.includes("5B");
+
+                if (supports5B) activeSwInfo = data;
+                return supports5B;
             } catch (error) {
                 return false;
             }
@@ -279,38 +158,28 @@
             log("SW: registrando ./sw.js con updateViaCache=none.");
 
             try {
-                const registration = await navigator.serviceWorker.register(
-                    "./sw.js",
-                    { updateViaCache: "none" }
-                );
-
+                const registration = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" });
                 await registration.update();
                 await navigator.serviceWorker.ready;
 
-                // El SW nuevo usa skipWaiting() + clients.claim(), pero la activación
-                // puede tardar un instante. Comprobamos la versión mediante lab-message.
                 for (let attempt = 1; attempt <= 30; attempt++) {
                     const active = await probeActiveWorker();
-
                     if (active) {
                         swReady = true;
-                        document.getElementById("sw-status").textContent = "Activo — versión 5B";
+                        document.getElementById("sw-status").textContent =
+                            `Activo — ${activeSwInfo.swVersion}, capacidad 5B`;
                         document.getElementById("controlled-status").textContent =
                             navigator.serviceWorker.controller ? "Sí" : "Sí, vía SW activo";
                         document.getElementById("result").textContent = "SW listo";
-                        log(`SW: versión 5B confirmada en intento ${attempt}.`);
-                        log(`SW: controller presente = ${Boolean(navigator.serviceWorker.controller)}.`);
+                        log(`SW: capacidad 5B confirmada en ${activeSwInfo.swVersion}, intento ${attempt}.`);
                         return true;
                     }
-
                     await sleep(200);
                 }
 
-                document.getElementById("sw-status").textContent = "No se confirmó versión 5B";
-                document.getElementById("controlled-status").textContent =
-                    navigator.serviceWorker.controller ? "Sí, pero versión no confirmada" : "No";
+                document.getElementById("sw-status").textContent = "No se confirmó capacidad 5B";
                 document.getElementById("result").textContent = "SW no listo";
-                log("SW: timeout esperando que la versión 5B tome control.");
+                log("SW: timeout esperando capacidad 5B.");
                 return false;
             } catch (error) {
                 document.getElementById("sw-status").textContent = "Error";
@@ -325,31 +194,22 @@
                 const ready = await prepareServiceWorker();
                 if (!ready) return false;
             }
-
-            if (!rewrittenUrl) {
-                buildRewrittenUrl();
-            }
+            if (!rewrittenUrl) buildRewrittenUrl();
 
             document.getElementById("result").textContent = "Request en curso";
             log("REQUEST: Chrome hará ahora un fetch REAL a la URL reescrita del mismo origen.");
-            log(`REQUEST: ${rewrittenUrl}`);
 
             try {
                 const response = await fetch(rewrittenUrl, { cache: "no-store" });
                 const data = await response.json();
-
-                document.getElementById("response-box").textContent =
-                    JSON.stringify(data, null, 2);
-
-                document.getElementById("logical-host").textContent =
-                    data.originalHost || "—";
+                document.getElementById("response-box").textContent = JSON.stringify(data, null, 2);
+                document.getElementById("logical-host").textContent = data.originalHost || "—";
 
                 const browserHost = new URL(rewrittenUrl).host;
-
                 const checks = {
                     httpOk: response.ok,
                     fromServiceWorker: data.source === "service-worker",
-                    correctVersion: data.swVersion === "5B",
+                    supports5B: Array.isArray(data.swFeatures) && data.swFeatures.includes("5B"),
                     intercepted: data.intercepted === true,
                     originalRecovered: data.originalUrl === EXPECTED_ORIGINAL,
                     browserHostCorrect: data.browserVisibleHost === browserHost,
@@ -358,23 +218,16 @@
                 };
 
                 const passed = Object.values(checks).every(Boolean);
-
                 log(`RESPONSE: HTTP ${response.status}.`);
                 log(`SW decoded: ${data.originalUrl}`);
-                log(`SW logical host: ${data.originalHost}`);
-                log(`SW networkContacted: ${data.networkContacted}`);
                 log(`VERIFY: ${JSON.stringify(checks)}`);
 
                 if (passed) {
-                    document.getElementById("result").textContent =
-                        "OK: rewrite → request → SW → decode";
+                    document.getElementById("result").textContent = "OK: rewrite → request → SW → decode";
                     log("RESULT: cadena 5B validada.");
                 } else {
-                    document.getElementById("result").textContent =
-                        "Respuesta recibida, pero alguna verificación falló";
-                    log("RESULT: revisar las verificaciones del log.");
+                    document.getElementById("result").textContent = "Respuesta recibida, pero alguna verificación falló";
                 }
-
                 return passed;
             } catch (error) {
                 document.getElementById("result").textContent = "Request falló";
@@ -386,10 +239,8 @@
         async function runFullTest() {
             resetLab(false);
             log("FULL TEST: iniciando cadena completa 5B.");
-
             const ready = await prepareServiceWorker();
             if (!ready) return;
-
             buildRewrittenUrl();
             await performInterceptedRequest();
         }
@@ -397,6 +248,7 @@
         function resetLab(clearLog = true) {
             rewrittenUrl = "";
             swReady = false;
+            activeSwInfo = null;
 
             document.getElementById("sw-status").textContent = "No comprobado";
             document.getElementById("controlled-status").textContent = "No comprobado";
