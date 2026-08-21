@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 8B - Defensive signal matrix</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1260px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2, h3 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    select { padding: 9px; font: inherit; min-width: 280px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    .confirmed { font-weight: 700; }
+    .observable { font-weight: 700; }
+    .model { font-style: italic; }
+    .none { opacity: .7; }
+    #diagram, #log { background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    #diagram { min-height: 170px; }
+    #log { min-height: 220px; }
+  </style>
+</head>
+<body>
+  <h1>Fase 8B — Defensive signal matrix</h1>
+
+  <p>
+    Esta fase resume qué señales siguen existiendo después de rewriting, Service Worker,
+    runtime virtual y transporte. No intenta evadir el filtro ni probar endpoints nuevos.
+    Todo se calcula localmente a partir del modelo arquitectónico y de resultados ya observados.
+  </p>
+
+  <a class="button" href="./phase8a.html">← Volver a Fase 8A</a>
+  <a class="button" href="./phase7e.html">Revisar Fase 7E</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    Niveles de evidencia: <strong>CONFIRMADO</strong> significa que lo vimos en este entorno;
+    <strong>OBSERVABLE</strong> significa que la señal existe en el stack de navegador/red;
+    <strong>MODELO</strong> significa que un filtro podría usarla, pero no hemos demostrado que
+    esta configuración concreta de Securly la utilice. No leemos telemetría interna de la extensión.
+  </div>
+
+  <div class="panel">
+    <h2>Arquitectura a inspeccionar</h2>
+    <select id="architecture" onchange="renderSelected()">
+      <option value="direct">Navegación/fetch directo</option>
+      <option value="iframe">Iframe cross-origin</option>
+      <option value="sw">Service Worker same-origin</option>
+      <option value="runtime">Runtime virtual sin request remoto</option>
+      <option value="wss">Transporte WebSocket permitido</option>
+      <option value="relay">Relay workers.dev probado anteriormente</option>
+    </select>
+    <button onclick="renderAll()">Mostrar matriz completa</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Señales físicas activas</strong><span id="physical-signals" class="mono">—</span></div>
+    <div class="stat"><strong>Señales solo-runtime</strong><span id="runtime-signals" class="mono">—</span></div>
+    <div class="stat"><strong>Host físico</strong><span id="physical-host" class="mono">—</span></div>
+    <div class="stat"><strong>URL lógica remota</strong><span id="logical-url" class="mono">—</span></div>
+    <div class="stat"><strong>Bloqueo confirmado</strong><span id="confirmed-block" class="mono">—</span></div>
+    <div class="stat"><strong>Conclusión</strong><span id="conclusion" class="mono">—</span></div>
+  </div>
+
+  <h2>Vista de capas</h2>
+  <div id="diagram"></div>
+
+  <h2>Matriz de señales</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Señal</th>
+        <th>¿Existe?</th>
+        <th>Qué representa</th>
+        <th>Evidencia</th>
+        <th>Qué NO podemos concluir</th>
+      </tr>
+    </thead>
+    <tbody id="signal-body"></tbody>
+  </table>
+
+  <h2>Comparación completa</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Arquitectura</th>
+        <th>Host físico</th>
+        <th>Request remoto</th>
+        <th>Endpoint/reputación</th>
+        <th>TLS/DNS/IP</th>
+        <th>Patrón de tráfico</th>
+        <th>URL lógica interna</th>
+        <th>Evidencia principal</th>
+      </tr>
+    </thead>
+    <tbody id="all-body"></tbody>
+  </table>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const architectures = {
+      direct: {
+        name: 'Navegación/fetch directo',
+        host: 'www.wikipedia.org',
+        logical: 'https://www.wikipedia.org/',
+        remoteRequest: true,
+        block: 'NO confirmado',
+        conclusion: 'El destino físico y el lógico coinciden.',
+        diagram: `app\n ↓\nhttps://www.wikipedia.org/\n ↓ request físico\nwww.wikipedia.org\n ↓\nstack de red / filtro`,
+        signals: {
+          hostname: ['SÍ', 'El hostname físico solicitado por Chrome.', 'OBSERVABLE', 'No demuestra qué regla exacta usa Securly.'],
+          endpoint: ['SÍ', 'Reputación/categoría posible del dominio físico.', 'MODELO', 'No hemos confirmado una categoría concreta para Wikipedia.'],
+          dnsip: ['SÍ', 'Resolución y destino de red asociados al endpoint.', 'OBSERVABLE', 'No demuestra que la extensión inspeccione DNS o IP directamente.'],
+          tls: ['SÍ', 'Existe una conexión HTTPS/TLS hacia el endpoint.', 'OBSERVABLE', 'No asumimos inspección del contenido TLS.'],
+          traffic: ['SÍ', 'Tiempos, duración y volumen existen físicamente.', 'MODELO', 'No hemos demostrado clasificación por forma de tráfico.'],
+          logical: ['SÍ, pero también física', 'La URL lógica coincide con el destino real.', 'OBSERVABLE', 'No implica que toda la URL/path sea visible al filtro.'],
+          runtime: ['NO relevante', 'No hay una capa virtual ocultando la intención.', 'OBSERVABLE', '—']
+        }
+      },
+      iframe: {
+        name: 'Iframe cross-origin',
+        host: 'www.wikipedia.org',
+        logical: 'https://www.wikipedia.org/',
+        remoteRequest: true,
+        block: 'NO confirmado',
+        conclusion: 'SOP aísla al parent, pero no elimina el request físico.',
+        diagram: `parent GitHub Pages\n ↓ iframe\nwww.wikipedia.org\n ↓ recursos internos propios\nblack-box para el parent\n\nSOP ≠ invisibilidad de red`,
+        signals: {
+          hostname: ['SÍ', 'El iframe navega físicamente a wikipedia.org.', 'OBSERVABLE', 'SOP no prueba invisibilidad frente al filtro.'],
+          endpoint: ['SÍ', 'El endpoint puede ser categorizable.', 'MODELO', 'No confirmamos qué categoría aplica.'],
+          dnsip: ['SÍ', 'La navegación requiere llegar al endpoint.', 'OBSERVABLE', 'No sabemos qué capa exacta usa Securly.'],
+          tls: ['SÍ', 'Existe conexión HTTPS al sitio.', 'OBSERVABLE', 'No asumimos descifrado TLS.'],
+          traffic: ['SÍ', 'El sitio puede iniciar subrecursos y navegación propia.', 'MODELO', 'El parent no puede enumerarlos por SOP.'],
+          logical: ['OPAQUE al parent', 'La app remota mantiene su propio estado lógico.', 'CONFIRMADO', 'OPAQUE al parent no significa invisible a la red.'],
+          runtime: ['OPAQUE', 'DOM/fetch/XHR internos quedaron fuera de 7D.', 'CONFIRMADO', 'No conocemos su telemetría interna.']
+        }
+      },
+      sw: {
+        name: 'Service Worker same-origin',
+        host: 'byteshark-dev.github.io',
+        logical: 'https://demo.invalid/img/logo.png (decodificada localmente)',
+        remoteRequest: false,
+        block: 'NO',
+        conclusion: 'La URL lógica puede existir sin que su host salga a red.',
+        diagram: `page\n ↓ fetch same-origin\nbyteshark-dev.github.io/__lab_route__/...\n ↓\nService Worker\n ↓ decode\nhttps://demo.invalid/...\n ↓\nrespuesta sintética\n\ncontacto demo.invalid = 0`,
+        signals: {
+          hostname: ['SÍ', 'El request físico es al origen GitHub Pages.', 'OBSERVABLE', 'No revela por sí solo la URL lógica decodificada.'],
+          endpoint: ['SÍ', 'El origen físico sigue teniendo reputación/categoría propia.', 'MODELO', 'No confirmamos clasificación específica.'],
+          dnsip: ['SÍ', 'Existe conectividad al origen GitHub Pages.', 'OBSERVABLE', 'No implica contacto con demo.invalid.'],
+          tls: ['SÍ', 'La conexión física es HTTPS al origen del laboratorio.', 'OBSERVABLE', 'No demuestra inspección de la respuesta sintética.'],
+          traffic: ['SÍ, same-origin', 'La petición física al laboratorio existe.', 'MODEL', 'No sabemos si el filtro usa forma de tráfico.'],
+          logical: ['SÍ, solo dentro del runtime/SW', 'demo.invalid se recupera desde la ruta reescrita.', 'CONFIRMADO', 'No hubo conexión a demo.invalid.'],
+          runtime: ['SÍ', 'SW y rewriter mantienen estado lógico separado.', 'CONFIRMADO', 'No implica que un filtro pueda o no inspeccionar código JS local.']
+        }
+      },
+      runtime: {
+        name: 'Runtime virtual sin request remoto',
+        host: '(ninguno para la URL lógica)',
+        logical: 'https://demo.invalid/api/profile',
+        remoteRequest: false,
+        block: 'NO request que bloquear',
+        conclusion: 'Sin request físico, no existe un destino remoto que clasificar.',
+        diagram: `app\n ↓\nhttps://demo.invalid/api/profile\n ↓ runtime virtual\nCAPTURED\n ↓\n0 fetch / 0 XHR / 0 socket\n\nla intención queda en memoria`,
+        signals: {
+          hostname: ['NO para demo.invalid', 'No se emitió request al host lógico.', 'CONFIRMADO', 'Esto no dice qué pasaría si luego se hiciera I/O remoto.'],
+          endpoint: ['NO para demo.invalid', 'No hay endpoint físico asociado a esa intención.', 'CONFIRMADO', 'No es una técnica de evasión; simplemente no hay red.'],
+          dnsip: ['NO', 'No se necesita resolver el destino lógico.', 'CONFIRMADO', '—'],
+          tls: ['NO', 'No existe conexión hacia el destino lógico.', 'CONFIRMADO', '—'],
+          traffic: ['NO remoto', 'La captura es local.', 'CONFIRMADO', 'El propio origen del laboratorio sí puede tener tráfico normal.'],
+          logical: ['SÍ', 'La app sigue viendo la URL lógica virtual.', 'CONFIRMADO', 'La presencia en memoria no equivale a privacidad frente a código con acceso local.'],
+          runtime: ['SÍ', '7E capturó 8/8 superficies con 0 contactos lógicos remotos.', 'CONFIRMADO', 'No demuestra bypass de políticas de red.']
+        }
+      },
+      wss: {
+        name: 'Transporte WebSocket permitido',
+        host: 'ws.postman-echo.com',
+        logical: 'streams/mensajes de laboratorio',
+        remoteRequest: true,
+        block: 'NO confirmado',
+        conclusion: 'Multiplexar cambia el contenido lógico, no el peer físico del socket.',
+        diagram: `runtime\n ↓ frames/mensajes\nWebSocket físico\n ↓\nwss://ws.postman-echo.com/raw\n ↓\npeer real = ws.postman-echo.com`,
+        signals: {
+          hostname: ['SÍ', 'El WebSocket se conecta a ws.postman-echo.com.', 'CONFIRMADO', 'No demuestra que Securly lea frames de aplicación.'],
+          endpoint: ['SÍ', 'El endpoint WSS tiene identidad/reputación propia.', 'MODELO', 'No confirmamos categoría ni scoring.'],
+          dnsip: ['SÍ', 'Debe resolverse y conectarse al peer WSS.', 'OBSERVABLE', 'No sabemos qué capa concreta usa el filtro.'],
+          tls: ['SÍ', 'WSS usa TLS hacia el endpoint físico.', 'OBSERVABLE', 'No asumimos visibilidad del payload.'],
+          traffic: ['SÍ', 'Una conexión persistente tiene duración, tamaños y cadencia.', 'MODELO', 'No demostramos análisis de patrones por Securly.'],
+          logical: ['NO necesariamente física', 'Los streams y mensajes internos pueden representar otra semántica.', 'CONFIRMADO', 'Eso no cambia el hostname del socket.'],
+          runtime: ['SÍ', 'Multiplexing, framing y flow-control ocurrieron sobre un peer fijo.', 'CONFIRMADO', 'No fue un túnel a destinos arbitrarios.']
+        }
+      },
+      relay: {
+        name: 'Relay workers.dev probado anteriormente',
+        host: 'securly-lab.byteshark-dev.workers.dev',
+        logical: 'https://example.com/ (target fijo del Worker)',
+        remoteRequest: true,
+        block: 'SÍ — Anonymous proxies',
+        conclusion: 'El endpoint físico fue suficiente para que Securly bloqueara antes del relay.',
+        diagram: `browser\n ↓\nsecurly-lab.byteshark-dev.workers.dev\n ↓\nSECURLY BLOCK\ncategory: Anonymous proxies\nmethod: Extension\n\nWorker target fijo nunca llegó a ser relevante`,
+        signals: {
+          hostname: ['SÍ', 'El navegador intentó contactar workers.dev.', 'CONFIRMADO', 'No necesitamos inferirlo: apareció la página de bloqueo.'],
+          endpoint: ['SÍ', 'Securly lo clasificó como Anonymous proxies.', 'CONFIRMADO', 'No sabemos el mecanismo exacto de reputación interno.'],
+          dnsip: ['Probablemente existe como parte de la conexión', 'El hostname físico debía resolverse para la navegación.', 'OBSERVABLE', 'No confirmamos decisión basada en IP/DNS.'],
+          tls: ['Existe a nivel de arquitectura', 'La URL era HTTPS.', 'OBSERVABLE', 'No confirmamos inspección TLS como causa del bloqueo.'],
+          traffic: ['No hizo falta demostrarlo', 'El bloqueo ocurrió antes de utilizar el relay.', 'CONFIRMADO', 'No podemos afirmar que la forma del tráfico influyera.'],
+          logical: ['NO llegó a ser relevante', 'El target fijo example.com estaba detrás del Worker.', 'CONFIRMADO', 'No sabemos si Securly conoció ese target.'],
+          runtime: ['NO fue el factor decisivo observado', 'El bloqueo se presentó sobre el endpoint workers.dev.', 'CONFIRMADO', 'No implica que runtime/JS sean siempre irrelevantes.']
+        }
+      }
+    };
+
+    const signalMeta = [
+      ['hostname', 'Hostname / peer físico'],
+      ['endpoint', 'Reputación / categoría del endpoint'],
+      ['dnsip', 'DNS / IP de destino'],
+      ['tls', 'TLS / protocolo de transporte'],
+      ['traffic', 'Forma del tráfico'],
+      ['logical', 'URL lógica / destino virtual'],
+      ['runtime', 'Estado interno de runtime / SW']
+    ];
+
+    function evidenceClass(value) {
+      if (value === 'CONFIRMADO') return 'confirmed';
+      if (value === 'OBSERVABLE') return 'observable';
+      if (value === 'MODELO' || value === 'MODEL') return 'model';
+      return 'none';
+    }
+
+    function renderSelected() {
+      const key = document.getElementById('architecture').value;
+      const arch = architectures[key];
+      const body = document.getElementById('signal-body');
+      body.innerHTML = '';
+
+      let physical = 0;
+      let runtimeOnly = 0;
+
+      for (const [id, label] of signalMeta) {
+        const [exists, meaning, evidence, caveat] = arch.signals[id];
+        if (['hostname', 'endpoint', 'dnsip', 'tls', 'traffic'].includes(id) && !exists.startsWith('NO')) physical++;
+        if (['logical', 'runtime'].includes(id) && !exists.startsWith('NO')) runtimeOnly++;
+
+        const row = document.createElement('tr');
+        const values = [label, exists, meaning, evidence, caveat];
+        values.forEach((value, index) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          if (index === 3) cell.className = `${evidenceClass(value)} mono`;
+          else if (index === 1) cell.className = 'mono';
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      }
+
+      document.getElementById('physical-signals').textContent = String(physical);
+      document.getElementById('runtime-signals').textContent = String(runtimeOnly);
+      document.getElementById('physical-host').textContent = arch.host;
+      document.getElementById('logical-url').textContent = arch.logical;
+      document.getElementById('confirmed-block').textContent = arch.block;
+      document.getElementById('conclusion').textContent = arch.conclusion;
+      document.getElementById('diagram').textContent = arch.diagram;
+
+      log(`VIEW: ${arch.name} | host=${arch.host} | remoteRequest=${arch.remoteRequest}`);
+    }
+
+    function renderAll() {
+      const body = document.getElementById('all-body');
+      body.innerHTML = '';
+
+      for (const arch of Object.values(architectures)) {
+        const row = document.createElement('tr');
+        const endpoint = arch.signals.endpoint[2];
+        const dnsTls = `${arch.signals.dnsip[0]} / ${arch.signals.tls[0]}`;
+        const traffic = arch.signals.traffic[0];
+        const logical = arch.signals.logical[0];
+        const primary = arch.block.startsWith('SÍ') ? 'CONFIRMADO: bloqueo por categoría' : arch.name.includes('Runtime') ? 'CONFIRMADO: 0 contactos remotos' : arch.name.includes('WebSocket') ? 'CONFIRMADO: WSS echo funcionó' : 'Resultados del navegador + modelo';
+        const values = [arch.name, arch.host, arch.remoteRequest ? 'SÍ' : 'NO', endpoint, dnsTls, traffic, logical, primary];
+        values.forEach((value) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      }
+      log('MATRIX: comparación completa renderizada localmente; requests nuevos=0.');
+    }
+
+    function log(message) {
+      const el = document.getElementById('log');
+      const time = new Date().toLocaleTimeString();
+      el.textContent += `[${time}] ${message}\n`;
+    }
+
+    renderAll();
+    renderSelected();
+    log('Fase 8B lista. No se ha iniciado ningún request nuevo.');
+  </script>
+</body>
+</html>
