@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 9 - Reporte final del laboratorio</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1320px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2, h3 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    select { padding: 9px; font: inherit; min-width: 230px; margin-right: 8px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    .pass { font-weight: 700; }
+    .block { font-weight: 700; }
+    .implemented { font-weight: 700; font-style: italic; }
+    .confirmed { font-weight: 700; }
+    .inferred { font-style: italic; }
+    #pipeline, #summary-box, #log { background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    #pipeline { min-height: 300px; }
+    #summary-box { min-height: 180px; }
+    #log { min-height: 180px; }
+    .small { font-size: .92rem; }
+  </style>
+</head>
+<body>
+  <h1>Fase 9 — Reporte final interactivo</h1>
+
+  <p>
+    Este documento consolida el laboratorio desde el baseline de filtrado hasta el modelo
+    end-to-end. No ejecuta requests, sockets ni navegación automática. Resume resultados ya
+    observados y mantiene separadas las conclusiones confirmadas de las inferencias defensivas.
+  </p>
+
+  <a class="button" href="./phase8c.html">← Volver a Fase 8C</a>
+  <a class="button" href="./phase8b.html">Revisar Fase 8B</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    Alcance: laboratorio educativo/defensivo. Se estudió rewriting, Service Workers, WebSocket,
+    framing Wisp simulado, runtime virtual y visibilidad de red. No se implementó un proxy abierto,
+    un túnel a destinos arbitrarios ni un mecanismo para desactivar o evadir políticas de Securly.
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Fases / subfases registradas</strong><span id="phase-count" class="mono">—</span></div>
+    <div class="stat"><strong>PASS validados</strong><span id="pass-count" class="mono">—</span></div>
+    <div class="stat"><strong>Bloqueos observados</strong><span id="block-count" class="mono">—</span></div>
+    <div class="stat"><strong>Implementadas sin validación separada</strong><span id="implemented-count" class="mono">—</span></div>
+    <div class="stat"><strong>Invariantes finales</strong><span class="mono">8/8 PASS</span></div>
+    <div class="stat"><strong>Conclusión global</strong><span id="global-status" class="mono">—</span></div>
+  </div>
+
+  <div class="panel">
+    <h2>Filtrar reporte</h2>
+    <select id="group-filter" onchange="renderPhases()">
+      <option value="all">Todas las fases</option>
+      <option value="baseline">0–3: baseline / request types</option>
+      <option value="transport">4: WebSocket / Wisp</option>
+      <option value="rewrite">5: rewriting / SW / adapter</option>
+      <option value="runtime">6: runtime virtual</option>
+      <option value="realweb">7: páginas y JavaScript reales</option>
+      <option value="defense">8: visibilidad defensiva</option>
+    </select>
+    <select id="status-filter" onchange="renderPhases()">
+      <option value="all">Todos los estados</option>
+      <option value="PASS">PASS</option>
+      <option value="OBSERVED BLOCK">OBSERVED BLOCK</option>
+      <option value="IMPLEMENTED">IMPLEMENTED</option>
+    </select>
+    <button onclick="resetFilters()">Restablecer</button>
+  </div>
+
+  <h2>Pipeline final</h2>
+  <div id="pipeline"></div>
+
+  <h2>Registro de fases</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Fase</th>
+        <th>Grupo</th>
+        <th>Estado</th>
+        <th>Qué se probó</th>
+        <th>Resultado observado</th>
+        <th>Qué significa</th>
+        <th>Limitación</th>
+        <th>Enlace</th>
+      </tr>
+    </thead>
+    <tbody id="phase-body"></tbody>
+  </table>
+
+  <h2>Hallazgos confirmados vs inferencias</h2>
+  <table>
+    <thead>
+      <tr><th>Hallazgo</th><th>Nivel</th><th>Base experimental</th><th>Conclusión permitida</th></tr>
+    </thead>
+    <tbody id="evidence-body"></tbody>
+  </table>
+
+  <h2>Resumen técnico</h2>
+  <div id="summary-box"></div>
+
+  <h2>Log local</h2>
+  <div id="log"></div>
+
+  <script>
+    const phases = [
+      {
+        id: '0', group: 'baseline', status: 'PASS', link: './',
+        test: 'Baseline de categorías y navegación directa.',
+        observed: 'neal.fun, slither.io, reddit.com y x.com bloqueados; wikipedia.org, example.com y otros destinos benignos permitidos.',
+        meaning: 'Existe una política de filtrado activa y diferenciada por destino/categoría.',
+        limitation: 'No revela la lógica interna completa de clasificación.'
+      },
+      {
+        id: '1', group: 'baseline', status: 'PASS', link: './',
+        test: 'Origen GitHub Pages como entorno del laboratorio.',
+        observed: 'Contexto seguro y origen estable en byteshark-dev.github.io.',
+        meaning: 'Se obtiene un origen HTTPS controlado para pruebas reproducibles.',
+        limitation: 'GitHub Pages no convierte automáticamente recursos remotos en same-origin.'
+      },
+      {
+        id: '2', group: 'baseline', status: 'PASS', link: './',
+        test: 'Service Worker y respuesta virtual same-origin.',
+        observed: 'El SW interceptó una ruta virtual y devolvió JSON generado localmente.',
+        meaning: 'El navegador puede virtualizar requests bajo su propio scope sin tocar un destino remoto.',
+        limitation: 'Un SW no elimina CORS/SOP para orígenes remotos por sí solo.'
+      },
+      {
+        id: '3', group: 'baseline', status: 'OBSERVED BLOCK', link: './',
+        test: 'Relay fijo en Cloudflare Worker hacia example.com.',
+        observed: 'Securly bloqueó workers.dev como “Anonymous proxies” antes de que el relay resultara útil.',
+        meaning: 'El endpoint físico puede clasificarse independientemente del destino lógico final.',
+        limitation: 'No demuestra qué todas las señales internas usa Securly; solo el resultado de esta prueba.'
+      },
+      {
+        id: '3B', group: 'baseline', status: 'PASS', link: './',
+        test: 'Matriz main_frame / iframe / subresource contra un destino bloqueado.',
+        observed: 'Cambiar el tipo de request no ocultó el hostname; el iframe también quedó sujeto al filtro.',
+        meaning: 'El tipo de recurso no sustituye al destino físico como señal.',
+        limitation: 'El probe de favicon fue ambiguo y no se usa como evidencia fuerte.'
+      },
+      {
+        id: '4A', group: 'transport', status: 'PASS', link: './phase4a.html',
+        test: 'WebSocket echo real.',
+        observed: 'wss://ws.postman-echo.com/raw abrió y devolvió el mismo payload.',
+        meaning: 'El entorno permite una conexión WSS a ese endpoint benigno.',
+        limitation: 'Un WSS permitido no implica que WebSocket eluda filtrado.'
+      },
+      {
+        id: '4B', group: 'transport', status: 'PASS', link: './phase4b.html',
+        test: 'Multiplexing lógico sobre una sola conexión WebSocket.',
+        observed: '1 conexión física, 3 streams lógicos, 5/5 paquetes demultiplexados.',
+        meaning: 'Varios flujos pueden compartir un transporte físico.',
+        limitation: 'El peer físico sigue siendo el mismo endpoint WSS.'
+      },
+      {
+        id: '4C', group: 'transport', status: 'PASS', link: './phase4c.html',
+        test: 'Lifecycle/state machine de streams.',
+        observed: '12/12 mensajes recibidos; 9 aceptados; 3 errores esperados; estados finales correctos.',
+        meaning: 'El transporte puede imponer semántica de apertura/datos/cierre por stream.',
+        limitation: 'Es una simulación de control de streams, no un túnel TCP/UDP.'
+      },
+      {
+        id: '4D', group: 'transport', status: 'PASS', link: './phase4d.html',
+        test: 'Serialización/decodificación de frames Wisp v2.',
+        observed: 'CONNECT, DATA y CLOSE conservaron los bytes al viajar como Base64 sobre echo de texto.',
+        meaning: 'El framing binario puede modelarse y validarse independientemente del transporte.',
+        limitation: 'Postman Echo no es un endpoint Wisp real.'
+      },
+      {
+        id: '4E', group: 'transport', status: 'PASS', link: './phase4e.html',
+        test: 'Handshake Wisp simulado con INFO/CONTINUE.',
+        observed: 'La máquina de estados rechazó frames fuera de orden y llegó a READY con secuencia válida.',
+        meaning: 'El protocolo puede modelar negociación y preparación antes de streams.',
+        limitation: 'Mock local; no abre sockets remotos.'
+      },
+      {
+        id: '4F', group: 'transport', status: 'PASS', link: './phase4f.html',
+        test: 'CONTINUE / créditos / backpressure.',
+        observed: '7 frames transportados; 5 DATA aceptados; bloqueo local al agotar créditos; créditos finales 0.',
+        meaning: 'El flujo puede regularse sin perder el estado del stream.',
+        limitation: 'No mide congestión real de red.'
+      },
+      {
+        id: '5A', group: 'rewrite', status: 'PASS', link: './phase5a.html',
+        test: 'Rewriting local de href/src/srcset/CSS url().',
+        observed: 'URLs lógicas se transformaron a rutas same-origin sin generar red.',
+        meaning: 'Rewriting cambia representación y routing interno.',
+        limitation: 'No aporta conectividad remota por sí solo.'
+      },
+      {
+        id: '5B', group: 'rewrite', status: 'PASS', link: './phase5b.html',
+        test: 'Ruta reescrita real interceptada por Service Worker.',
+        observed: 'Chrome pidió byteshark-dev.github.io; el SW recuperó demo.invalid y devolvió respuesta sintética; destino lógico remoto = 0 requests.',
+        meaning: 'Una URL lógica puede viajar codificada dentro de una ruta física distinta.',
+        limitation: 'La respuesta fue sintética; no hubo I/O al destino lógico.'
+      },
+      {
+        id: '5C', group: 'rewrite', status: 'PASS', link: './phase5c.html',
+        test: 'Frontera SW ↔ adapter con MessageChannel + WebSocket Echo.',
+        observed: 'Routing same-origin y transporte controlado funcionaron sin contactar demo.invalid.',
+        meaning: 'Routing, transporte y destination I/O son capas distintas.',
+        limitation: 'El echo solo devuelve el envelope; no conecta al destino lógico.'
+      },
+      {
+        id: '5D', group: 'rewrite', status: 'IMPLEMENTED', link: './phase5d.html',
+        test: 'Adapter con CONNECT/DATA/CLOSE en frames Wisp simulados.',
+        observed: 'Implementado en el repo; no se registró una validación independiente posterior en el historial del laboratorio.',
+        meaning: 'Integra framing Wisp simulado con la frontera SW/adapter.',
+        limitation: 'No se marca PASS independiente y no es un endpoint Wisp real.'
+      },
+      {
+        id: '6A', group: 'runtime', status: 'PASS', link: './phase6a.html',
+        test: 'Comparación arquitectónica con Scramjet.',
+        observed: 'Se separaron page/runtime, rewriting, interception, normalization, transport y remote I/O.',
+        meaning: 'Ayudó a ubicar qué problemas resuelve cada capa.',
+        limitation: 'Comparación conceptual; no ejecuta Scramjet.'
+      },
+      {
+        id: '6B', group: 'runtime', status: 'PASS', link: './phase6b.html',
+        test: 'Virtualización local de location/open/fetch/WebSocket/importScripts/DOM setter.',
+        observed: '6 operaciones virtualizadas, APIs nativas 0, requests 0.',
+        meaning: 'El runtime puede representar intención sin invocar la API nativa.',
+        limitation: 'Objetos simulados; no monkey-patching de APIs reales.'
+      },
+      {
+        id: '6C', group: 'runtime', status: 'PASS', link: './phase6c.html',
+        test: 'Runtime leak audit.',
+        observed: 'Baseline detectó 3 WOULD_LEAK; parche simulado dejó 0 leaks con 6/6 superficies cubiertas.',
+        meaning: 'La cobertura de APIs es crítica para mantener coherencia del runtime.',
+        limitation: 'WOULD_LEAK es predicción local; no ejecuta el leak real.'
+      },
+      {
+        id: '6D', group: 'runtime', status: 'PASS', link: './phase6d.html',
+        test: 'State illusion / unrewriting.',
+        observed: '6 getters: baseline expuso estado interno; modo protegido devolvió 6/6 valores lógicos y 0 internal leaks.',
+        meaning: 'Escritura y lectura necesitan rewrite/unrewrite consistentes.',
+        limitation: 'Getters virtuales; no sustituye globals reales.'
+      },
+      {
+        id: '7A', group: 'realweb', status: 'PASS', link: './phase7a.html',
+        test: 'Página real fija: example.com.',
+        observed: 'Iframe real cargó; DOM cross-origin bloqueado; fetch separado por CORS; fixture local reescrita.',
+        meaning: 'Navegar, usar un recurso y leerlo desde JS son permisos distintos.',
+        limitation: 'El rewriter trabajó sobre fixture local, no sobre HTML remoto descargado.'
+      },
+      {
+        id: '7B', group: 'realweb', status: 'PASS', link: './phase7b.html',
+        test: 'Compatibility report con Wikipedia.',
+        observed: 'Documento PASS, imagen PASS, stylesheet FAIL, CSSOM bloqueado por SOP, fetch FAIL, 8 mappings, reporte general OK.',
+        meaning: 'Las superficies de una web real tienen políticas y modos de carga diferentes.',
+        limitation: 'El fallo del stylesheet no se atribuyó al runtime; el asset/probe podía ser la causa.'
+      },
+      {
+        id: '7C', group: 'realweb', status: 'PASS', link: './phase7c.html',
+        test: 'JavaScript externo real con Alpine.js.',
+        observed: 'Carga, ejecución, DOM mutation, eventos y timer pasaron; URLs dinámicas se capturaron sin requests nativos.',
+        meaning: 'JavaScript remoto real puede ejecutar mientras un harness controla intenciones locales concretas.',
+        limitation: 'Las expresiones de URL se diseñaron para pasar por helpers del laboratorio.'
+      },
+      {
+        id: '7D', group: 'realweb', status: 'PASS', link: './phase7d.html',
+        test: 'Página real + JavaScript como black-box.',
+        observed: 'Wikipedia load PASS; 2 loads; DOM bloqueado por SOP; Resource Timing LIMITED(1); sin ACK; UI dinámica observada; requests internos OPAQUE.',
+        meaning: 'El JS real funciona dentro del iframe mientras el parent permanece aislado.',
+        limitation: 'El parent no puede enumerar tráfico ni estado interno cross-origin.'
+      },
+      {
+        id: '7E', group: 'realweb', status: 'PASS', link: './phase7e.html',
+        test: 'Instrumented vs Black-box.',
+        observed: 'Child same-origin PASS; baseline 6/6; runtime coverage 8/8; 2 requests same-origin; 0 contactos lógicos remotos.',
+        meaning: 'Same-origin permite observación; runtime instrumentado permite captura explícita de superficies.',
+        limitation: 'No convierte una página cross-origin arbitraria en same-origin.'
+      },
+      {
+        id: '8A', group: 'defense', status: 'PASS', link: './phase8a.html',
+        test: 'Visibility matrix del filtro.',
+        observed: '5/5 probes; 4 requests físicos; 3 hosts físicos; 1 URL solo-runtime; resultado: endpoint físico != URL lógica.',
+        meaning: 'El stack de red solo ve requests que realmente salen; las URLs puramente virtuales no generan un peer.',
+        limitation: 'No lee telemetría interna de la extensión.'
+      },
+      {
+        id: '8B', group: 'defense', status: 'PASS', link: './phase8b.html',
+        test: 'Defensive signal matrix.',
+        observed: 'Matriz local de hostname, endpoint/reputación, DNS/IP, TLS/WSS y patrón de tráfico por arquitectura.',
+        meaning: 'Virtualización interna y señales físicas pertenecen a fronteras diferentes.',
+        limitation: '“Observable” no equivale a “Securly confirmado”.'
+      },
+      {
+        id: '8C', group: 'defense', status: 'PASS', link: './phase8c.html',
+        test: 'End-to-end architecture & threat model.',
+        observed: '8 capas, 7 fronteras, 7 señales confirmadas, 3 solo-runtime, 4 físicas y 8/8 invariantes PASS.',
+        meaning: 'El modelo final es consistente con las observaciones realizadas.',
+        limitation: 'Es una síntesis local; no añade telemetría ni pruebas de egress nuevas.'
+      }
+    ];
+
+    const evidence = [
+      {
+        finding: 'Securly bloqueó el Cloudflare Worker como “Anonymous proxies”.',
+        level: 'CONFIRMADO',
+        base: 'Fase 3, pantalla de bloqueo de la extensión.',
+        conclusion: 'Ese endpoint físico fue clasificado y bloqueado en este entorno.'
+      },
+      {
+        finding: 'Un WebSocket a ws.postman-echo.com pudo abrir y hacer echo.',
+        level: 'CONFIRMADO',
+        base: 'Fase 4A y fases posteriores de transporte.',
+        conclusion: 'Ese endpoint WSS específico fue alcanzable durante las pruebas.'
+      },
+      {
+        finding: 'SOP impide al parent leer DOM/estado de iframes cross-origin.',
+        level: 'CONFIRMADO',
+        base: 'Fases 7A, 7B y 7D.',
+        conclusion: 'Iframe cross-origin no equivale a instrumentación del runtime interno.'
+      },
+      {
+        finding: 'Una URL lógica puede existir sin generar ningún request físico.',
+        level: 'CONFIRMADO',
+        base: 'Fases 5B, 6B–6D, 7E y 8A.',
+        conclusion: 'Sin request no existe un peer remoto asociado a esa URL.'
+      },
+      {
+        finding: 'El endpoint físico, DNS/IP, TLS/WSS y patrones de tráfico son señales potencialmente observables cuando hay red.',
+        level: 'OBSERVABLE / MODELO',
+        base: 'Fases 8A–8C y propiedades normales del stack de red.',
+        conclusion: 'Un filtro podría usar esas señales; no afirmamos cuáles usa Securly salvo donde hubo evidencia directa.'
+      },
+      {
+        finding: 'Multiplexing y framing cambian el contenido lógico, no el peer físico.',
+        level: 'CONFIRMADO EN EL MODELO',
+        base: 'Fases 4B–4F y 8A–8C.',
+        conclusion: 'Compartir streams no elimina la necesidad de un endpoint de transporte.'
+      }
+    ];
+
+    function statusClass(status) {
+      if (status === 'PASS') return 'pass mono';
+      if (status === 'OBSERVED BLOCK') return 'block mono';
+      return 'implemented mono';
+    }
+
+    function groupName(group) {
+      const names = {
+        baseline: 'Baseline / requests',
+        transport: 'Transport / Wisp',
+        rewrite: 'Rewriting / SW',
+        runtime: 'Runtime virtual',
+        realweb: 'Web real',
+        defense: 'Defensivo'
+      };
+      return names[group] || group;
+    }
+
+    function renderStats() {
+      document.getElementById('phase-count').textContent = String(phases.length);
+      document.getElementById('pass-count').textContent = String(phases.filter(p => p.status === 'PASS').length);
+      document.getElementById('block-count').textContent = String(phases.filter(p => p.status === 'OBSERVED BLOCK').length);
+      document.getElementById('implemented-count').textContent = String(phases.filter(p => p.status === 'IMPLEMENTED').length);
+      document.getElementById('global-status').textContent = 'LAB ARCHITECTURE VALIDATED';
+    }
+
+    function renderPipeline() {
+      document.getElementById('pipeline').textContent = `
+APLICACIÓN / URL LÓGICA
+        │
+        ▼
+REWRITER
+  - href/src/srcset/CSS
+  - rutas same-origin
+        │
+        ▼
+RUNTIME VIRTUAL
+  - location / fetch / XHR
+  - WebSocket / Worker / history
+  - state illusion + unrewrite
+        │
+        ▼
+SERVICE WORKER
+  - interception
+  - rutas sintéticas
+        │
+        ▼
+TRANSPORT ADAPTER
+  - MessageChannel
+  - WebSocket permitido
+  - multiplexing
+  - framing Wisp simulado
+        │
+        ▼
+==============================
+       FRONTERA FÍSICA
+==============================
+        │
+        ▼
+ENDPOINT FÍSICO
+  - hostname
+  - DNS / IP
+  - HTTPS / WSS / TLS
+  - patrón de tráfico
+        │
+        ▼
+FILTRO / EGRESS
+        │
+        ▼
+INTERNET / DESTINO REMOTO
+
+Conclusión: la semántica de la aplicación puede virtualizarse dentro del navegador,
+pero cualquier comunicación remota necesita un endpoint físico observable por el stack de red.`;
+    }
+
+    function renderPhases() {
+      const group = document.getElementById('group-filter').value;
+      const status = document.getElementById('status-filter').value;
+      const body = document.getElementById('phase-body');
+      body.innerHTML = '';
+
+      const filtered = phases.filter((phase) =>
+        (group === 'all' || phase.group === group) &&
+        (status === 'all' || phase.status === status)
+      );
+
+      for (const phase of filtered) {
+        const row = document.createElement('tr');
+        const values = [phase.id, groupName(phase.group), phase.status, phase.test, phase.observed, phase.meaning, phase.limitation];
+        values.forEach((value, index) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          if (index === 2) cell.className = statusClass(phase.status);
+          row.appendChild(cell);
+        });
+
+        const linkCell = document.createElement('td');
+        const link = document.createElement('a');
+        link.href = phase.link;
+        link.textContent = 'Abrir';
+        linkCell.appendChild(link);
+        row.appendChild(linkCell);
+        body.appendChild(row);
+      }
+
+      log(`Filtro: ${filtered.length}/${phases.length} fases visibles.`);
+    }
+
+    function renderEvidence() {
+      const body = document.getElementById('evidence-body');
+      body.innerHTML = '';
+      for (const item of evidence) {
+        const row = document.createElement('tr');
+        [item.finding, item.level, item.base, item.conclusion].forEach((value, index) => {
+          const cell = document.createElement('td');
+          cell.textContent = value;
+          if (index === 1) cell.className = value.startsWith('CONFIRMADO') ? 'confirmed mono' : 'inferred mono';
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      }
+    }
+
+    function renderSummary() {
+      document.getElementById('summary-box').textContent = `
+1. CORS y SOP son fronteras distintas de navegación y carga de subrecursos.
+2. Service Workers y rewriting pueden controlar rutas internas bajo un origen propio.
+3. Multiplexing y framing permiten semántica de streams, pero no cambian el peer físico.
+4. Un runtime puede capturar y virtualizar APIs, mantener state illusion y evitar leaks internos.
+5. JavaScript real y páginas reales mostraron la diferencia entre black-box cross-origin y ejecución observable same-origin.
+6. Las URLs lógicas que nunca salen a red no generan hostname/DNS/TLS remoto.
+7. Cuando sí hay comunicación remota reaparecen señales físicas: endpoint, DNS/IP, TLS/WSS/HTTPS y tráfico.
+8. En este entorno, workers.dev fue bloqueado explícitamente como Anonymous proxies.
+9. No se demostró qué conjunto completo de señales usa internamente Securly; “observable” no equivale a “confirmado”.
+10. El laboratorio valida una arquitectura educativa de virtualización y visibilidad, no un bypass del filtro.`;
+    }
+
+    function resetFilters() {
+      document.getElementById('group-filter').value = 'all';
+      document.getElementById('status-filter').value = 'all';
+      renderPhases();
+    }
+
+    function log(message) {
+      const box = document.getElementById('log');
+      const time = new Date().toLocaleTimeString();
+      box.textContent += `[${time}] ${message}\n`;
+    }
+
+    renderStats();
+    renderPipeline();
+    renderEvidence();
+    renderSummary();
+    renderPhases();
+    log('Fase 9 cargada. Reporte completamente local; requests nuevos = 0.');
+  </script>
+</body>
+</html>
