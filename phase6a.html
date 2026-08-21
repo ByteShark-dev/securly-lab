@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 6A - Laboratorio vs Scramjet</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 1180px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+        h1, h2, h3 { margin-bottom: 10px; }
+        .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+        .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+        button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+        th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; }
+        th { background: #f4f4f4; }
+        .mono, code { font-family: monospace; word-break: break-all; }
+        .pipeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 15px 0; }
+        .stage { border: 1px solid #ccc; border-radius: 8px; padding: 12px; min-height: 110px; transition: transform .15s ease, outline .15s ease; }
+        .stage.active { outline: 3px solid currentColor; transform: translateY(-2px); }
+        .stage strong { display: block; margin-bottom: 6px; }
+        .compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+        .compare-card { border: 1px solid #ccc; border-radius: 8px; padding: 14px; }
+        .box { background: #f7f7f7; border-radius: 8px; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; min-height: 150px; }
+        .status { display: inline-block; padding: 2px 7px; border: 1px solid #bbb; border-radius: 999px; font-size: .9em; }
+        #log { background: #111; color: #eee; border-radius: 8px; padding: 15px; min-height: 220px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    </style>
+</head>
+<body>
+    <h1>Fase 6A — Nuestro laboratorio vs Scramjet real</h1>
+
+    <p>
+        Esta fase no añade transporte ni acceso remoto. Su objetivo es ubicar las piezas
+        que construimos en las fases anteriores dentro de la arquitectura publicada de
+        Scramjet y distinguir una analogía educativa de una implementación completa.
+    </p>
+
+    <a class="button" href="./phase5d.html">← Volver a Fase 5D</a>
+    <a class="button" href="./">Laboratorio principal</a>
+
+    <div class="note">
+        Scramjet real tiene muchas más superficies que este laboratorio: instrumentación
+        del entorno del navegador, rewriter dedicado, manejo de fetch/headers/body,
+        sandboxing, controladores y transports. Aquí solo comparamos responsabilidades;
+        no cargamos su runtime ni abrimos sockets a destinos lógicos.
+    </div>
+
+    <h2>Pipeline conceptual</h2>
+    <div class="pipeline" id="pipeline">
+        <div class="stage" data-stage="0"><strong>1. Página / runtime</strong><span class="mono">DOM + APIs JS</span></div>
+        <div class="stage" data-stage="1"><strong>2. Rewriting</strong><span class="mono">URLs + contenido</span></div>
+        <div class="stage" data-stage="2"><strong>3. Intercepción</strong><span class="mono">Service Worker / fetch</span></div>
+        <div class="stage" data-stage="3"><strong>4. Normalización</strong><span class="mono">request / headers / body</span></div>
+        <div class="stage" data-stage="4"><strong>5. Transport</strong><span class="mono">adapter / proxy transport</span></div>
+        <div class="stage" data-stage="5"><strong>6. I/O remoto</strong><span class="mono">servidor / socket destino</span></div>
+    </div>
+
+    <div class="panel">
+        <h2>Recorrer una solicitud</h2>
+        <button onclick="previousStage()">← Anterior</button>
+        <button onclick="nextStage()">Siguiente →</button>
+        <button onclick="runAllStages()">Recorrer todo</button>
+        <button onclick="resetStages()">Reiniciar</button>
+    </div>
+
+    <div class="compare">
+        <section class="compare-card">
+            <h2>Nuestro laboratorio</h2>
+            <div id="lab-detail" class="box">Pulsa “Siguiente” para comenzar.</div>
+        </section>
+        <section class="compare-card">
+            <h2>Scramjet real</h2>
+            <div id="scramjet-detail" class="box">Pulsa “Siguiente” para comenzar.</div>
+        </section>
+    </div>
+
+    <h2>Matriz de equivalencias</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>Responsabilidad</th>
+                <th>Nuestro laboratorio</th>
+                <th>Scramjet publicado</th>
+                <th>Equivalencia</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>Reescribir URLs</td>
+                <td><code>phase5a.html</code>: atributos HTML/CSS y una simulación de fetch()</td>
+                <td><code>packages/core/rewriter</code></td>
+                <td><span class="status">Parcial</span></td>
+            </tr>
+            <tr>
+                <td>Runtime del cliente</td>
+                <td>Solo una función educativa <code>labFetch()</code>; no parcheamos APIs globales</td>
+                <td><code>packages/core/src/client</code>, incluyendo DOM, location y worker helpers</td>
+                <td><span class="status">Muy parcial</span></td>
+            </tr>
+            <tr>
+                <td>Intercepción</td>
+                <td><code>sw.js</code> + rutas <code>__lab_route__</code>, <code>__lab_transport__</code>, <code>__lab_wisp__</code></td>
+                <td>Core de Scramjet combina intercepción con su propia capa fetch/runtime</td>
+                <td><span class="status">Conceptualmente cercana</span></td>
+            </tr>
+            <tr>
+                <td>Fetch / request handling</td>
+                <td>GET fijo, respuesta sintética y MessageChannel</td>
+                <td><code>packages/core/src/fetch</code> separa body, fetch, headers, parse y util</td>
+                <td><span class="status">Simplificada</span></td>
+            </tr>
+            <tr>
+                <td>Transport</td>
+                <td>Adapter local → WebSocket Echo</td>
+                <td>Core depende de <code>@mercuryworkshop/proxy-transports</code></td>
+                <td><span class="status">Interfaz análoga</span></td>
+            </tr>
+            <tr>
+                <td>Wisp framing</td>
+                <td>CONNECT/DATA/CLOSE auténticos, pero solo eco Base64</td>
+                <td>El ecosistema de MercuryWorkshop usa transports y Wisp en herramientas relacionadas; un servidor real interpreta frames y realiza I/O</td>
+                <td><span class="status">Wire format, no backend</span></td>
+            </tr>
+            <tr>
+                <td>Socket al destino</td>
+                <td><strong>No existe</strong></td>
+                <td>Necesario en una implementación proxy completa</td>
+                <td><span class="status">Deliberadamente ausente</span></td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h2>Árbol simplificado del repositorio oficial</h2>
+    <div class="box">MercuryWorkshop/scramjet
+│
+├─ packages/
+│  ├─ core/
+│  │  ├─ rewriter/
+│  │  └─ src/
+│  │     ├─ client/
+│  │     ├─ fetch/
+│  │     └─ shared/
+│  ├─ controller/
+│  ├─ bootstrap/
+│  ├─ rpc/
+│  ├─ runway/
+│  └─ utils/
+│
+└─ tests/</div>
+
+    <h2>Qué sí y qué no hemos construido</h2>
+    <div class="compare">
+        <div class="compare-card">
+            <h3>Sí</h3>
+            <div class="box">✓ Service Worker interceptando requests reales del mismo origen
+✓ URL rewriting controlado
+✓ separación entre URL visible y URL lógica
+✓ MessageChannel como frontera SW ↔ adapter
+✓ WebSocket persistente
+✓ multiplexación y estados de stream
+✓ frames Wisp v2 de laboratorio
+✓ handshake y flow control simulados</div>
+        </div>
+        <div class="compare-card">
+            <h3>No</h3>
+            <div class="box">✗ runtime completo de instrumentación web
+✗ cobertura de todas las APIs del navegador
+✗ manejo real de cookies/CORS/headers de sitios remotos
+✗ servidor Wisp operativo
+✗ TCP/UDP hacia destinos lógicos
+✗ navegación arbitraria
+✗ proxy funcional</div>
+        </div>
+    </div>
+
+    <h2>Log de recorrido</h2>
+    <div id="log"></div>
+
+    <script>
+        const stages = [
+            {
+                lab: `FASE 5A\n\nUna página de ejemplo contiene src, href, action, CSS url() y fetch().\n\nNuestro rewriter transforma únicamente superficies seleccionadas; fetch() se mostró mediante labFetch().`,
+                real: `SCRAMJET\n\nEl repositorio tiene packages/core/src/client con código de cliente, DOM, location y helpers de workers.\n\nSu README describe instrumentación y sandboxing dentro del navegador, por lo que el runtime cubre muchas más superficies que nuestro ejemplo.`
+            },
+            {
+                lab: `FASE 5A\n\n../img/logo.png\n→ https://demo.invalid/img/logo.png\n→ /__lab_route__/BASE64URL\n\nRewriter escrito en JavaScript y limitado a un HTML de laboratorio.`,
+                real: `SCRAMJET\n\nExiste packages/core/rewriter como componente dedicado.\n\nEl build oficial incluso tiene un paso específico rewriter:build, separado del build general del core.`
+            },
+            {
+                lab: `FASES 5B–5D\n\nChrome hace un fetch REAL al mismo origen.\nsw.js intercepta la ruta y recupera la URL lógica.`,
+                real: `SCRAMJET\n\nLa arquitectura publicada se define como interception-based.\n\nSu core contiene código de cliente y una capa fetch dedicada para participar en esa intercepción y virtualización de requests.`
+            },
+            {
+                lab: `FASE 5C\n\nSolo manejamos GET fijo y metadata mínima:\nmethod + logicalUrl.\n\nLa respuesta final es sintética.`,
+                real: `SCRAMJET\n\npackages/core/src/fetch está dividido en body.ts, fetch.ts, headers.ts, parse.ts y util.ts.\n\nEso muestra que una implementación completa necesita modelar mucho más que una URL y un método.`
+            },
+            {
+                lab: `FASES 5C–5D\n\nSW → MessageChannel → adapter → WebSocket Echo.\n\nEn 5D el adapter serializa CONNECT/DATA/CLOSE Wisp y verifica los bytes al regresar.`,
+                real: `SCRAMJET\n\nEl package core declara dependencia de @mercuryworkshop/proxy-transports.\n\nEl controller también depende de proxy-transports. La capa de transporte está abstraída, no mezclada con cada regla de rewriting.`
+            },
+            {
+                lab: `NO IMPLEMENTADO\n\nPostman Echo devuelve nuestros bytes.\nNo interpreta CONNECT.\nNo abre demo.invalid:443.`,
+                real: `PROXY COMPLETO\n\nEn algún punto del lado remoto, una implementación funcional debe realizar I/O real hacia el destino y devolver su respuesta.\n\nEsa es precisamente la frontera que nuestro laboratorio deja fuera.`
+            }
+        ];
+
+        let current = -1;
+        let runTimer = null;
+
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            document.getElementById("log").textContent += `[${time}] ${message}\n`;
+        }
+
+        function renderStage(index) {
+            current = index;
+            document.querySelectorAll(".stage").forEach((element, i) => {
+                element.classList.toggle("active", i === index);
+            });
+
+            if (index < 0 || index >= stages.length) {
+                document.getElementById("lab-detail").textContent = "Pulsa “Siguiente” para comenzar.";
+                document.getElementById("scramjet-detail").textContent = "Pulsa “Siguiente” para comenzar.";
+                return;
+            }
+
+            document.getElementById("lab-detail").textContent = stages[index].lab;
+            document.getElementById("scramjet-detail").textContent = stages[index].real;
+            log(`ETAPA ${index + 1}/6: ${document.querySelector(`[data-stage="${index}"] strong`).textContent}`);
+        }
+
+        function nextStage() {
+            const next = Math.min(current + 1, stages.length - 1);
+            renderStage(next);
+        }
+
+        function previousStage() {
+            const previous = Math.max(current - 1, 0);
+            renderStage(previous);
+        }
+
+        function runAllStages() {
+            if (runTimer) clearInterval(runTimer);
+            renderStage(0);
+            let index = 0;
+            runTimer = setInterval(() => {
+                index += 1;
+                if (index >= stages.length) {
+                    clearInterval(runTimer);
+                    runTimer = null;
+                    log("FIN: comparación completa. Nuestro laboratorio termina antes del I/O remoto.");
+                    return;
+                }
+                renderStage(index);
+            }, 1400);
+        }
+
+        function resetStages() {
+            if (runTimer) clearInterval(runTimer);
+            runTimer = null;
+            current = -1;
+            document.getElementById("log").textContent = "";
+            renderStage(-1);
+            log("Fase 6A lista. Esta página no realiza requests externos.");
+        }
+
+        resetStages();
+    </script>
+</body>
+</html>
