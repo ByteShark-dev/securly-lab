@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 6B - Runtime virtual del navegador</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1180px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2, h3 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    .box { background: #f7f7f7; border-radius: 8px; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    #log { min-height: 310px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Fase 6B — Runtime virtual del navegador</h1>
+
+  <p>
+    Esta fase demuestra por qué cambiar únicamente <code>src</code>, <code>href</code>
+    o el HTML inicial no basta. Una página también puede producir navegación y
+    solicitudes desde APIs de JavaScript. Aquí usamos un runtime completamente local
+    que intercepta operaciones ficticias y las traduce a rutas del laboratorio.
+  </p>
+
+  <a class="button" href="./phase6a.html">← Volver a Fase 6A</a>
+  <a class="button" href="./phase5d.html">Revisar Fase 5D</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    No se reemplaza ninguna API real del navegador. No se llama <code>window.open()</code>,
+    <code>fetch()</code>, <code>new WebSocket()</code>, <code>Worker</code> ni
+    <code>importScripts()</code>. Todo son objetos y strings de laboratorio.
+  </div>
+
+  <h2>Escenario lógico fijo</h2>
+  <div class="box">Documento lógico: https://demo.invalid/app/index.html
+Origen lógico:   https://demo.invalid
+Origen real lab:  ${location.origin}/securly-lab/
+
+Objetivo: conservar la ilusión lógica de demo.invalid sin permitir que estas operaciones contacten demo.invalid.</div>
+
+  <div class="panel">
+    <h2>Control</h2>
+    <button onclick="runOperation('location')">location.assign()</button>
+    <button onclick="runOperation('open')">window.open()</button>
+    <button onclick="runOperation('fetch')">fetch()</button>
+    <button onclick="runOperation('websocket')">new WebSocket()</button>
+    <button onclick="runOperation('importScripts')">importScripts()</button>
+    <button onclick="runOperation('dom')">img.src setter</button>
+    <button onclick="runAll()">Ejecutar las 6</button>
+    <button onclick="resetLab()">Reiniciar</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Operaciones capturadas</strong><span id="captured-count" class="mono">0/6</span></div>
+    <div class="stat"><strong>APIs nativas invocadas</strong><span class="mono">0</span></div>
+    <div class="stat"><strong>Requests reales</strong><span class="mono">0</span></div>
+    <div class="stat"><strong>Hosts lógicos contactados</strong><span class="mono">0</span></div>
+    <div class="stat"><strong>Estado</strong><span id="status" class="mono">Sin ejecutar</span></div>
+  </div>
+
+  <h2>Matriz del runtime</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>API</th>
+        <th>Intento de la página</th>
+        <th>URL lógica resuelta</th>
+        <th>Acción del runtime</th>
+        <th>Ruta visible al navegador</th>
+        <th>Estado</th>
+      </tr>
+    </thead>
+    <tbody id="matrix-body"></tbody>
+  </table>
+
+  <h2>Última operación</h2>
+  <div id="detail" class="box">Sin operaciones.</div>
+
+  <h2>Qué está representando</h2>
+  <div class="box">Página cree que usa APIs normales
+        │
+        ▼
+Runtime virtual
+        │
+        ├─ resuelve contra la URL lógica
+        ├─ conserva metadatos relevantes
+        ├─ transforma URL / protocolo
+        └─ NO invoca la API nativa
+        │
+        ▼
+Ruta de laboratorio same-origin
+        │
+        ▼
+STOP — fase 6B no hace red</div>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+<script>
+  const LOGICAL_DOCUMENT = "https://demo.invalid/app/index.html";
+  const RUNTIME_PREFIX = `${location.origin}/securly-lab/__runtime__/`;
+
+  const OPERATIONS = {
+    location: {
+      api: "location.assign()",
+      raw: "../account?tab=profile#bio",
+      kind: "navigate",
+      metadata: { navigation: "assign" }
+    },
+    open: {
+      api: "window.open()",
+      raw: "/help/start.html",
+      kind: "navigate",
+      metadata: { target: "_blank" }
+    },
+    fetch: {
+      api: "fetch()",
+      raw: "/api/profile",
+      kind: "fetch",
+      metadata: { mode: "cors", credentials: "include", method: "GET" }
+    },
+    websocket: {
+      api: "new WebSocket()",
+      raw: "/events",
+      kind: "websocket",
+      metadata: { protocols: ["lab-v1"] }
+    },
+    importScripts: {
+      api: "importScripts()",
+      raw: "./workers/helper.js",
+      kind: "worker-import",
+      metadata: { workerContext: true }
+    },
+    dom: {
+      api: "img.src setter",
+      raw: "../img/avatar.png",
+      kind: "dom-url",
+      metadata: { element: "IMG", property: "src" }
+    }
+  };
+
+  const state = new Map();
+
+  function log(message) {
+    const time = new Date().toLocaleTimeString();
+    document.getElementById("log").textContent += `[${time}] ${message}\n`;
+  }
+
+  function textToBase64Url(text) {
+    const bytes = new TextEncoder().encode(text);
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  }
+
+  function logicalResolve(op) {
+    if (op.kind !== "websocket") {
+      return new URL(op.raw, LOGICAL_DOCUMENT).href;
+    }
+
+    // Igual que una API WebSocket real, una ruta relativa parte del documento
+    // lógico; después convertimos http→ws o https→wss.
+    const base = new URL(LOGICAL_DOCUMENT);
+    const resolved = new URL(op.raw, base);
+    if (resolved.protocol === "https:") resolved.protocol = "wss:";
+    if (resolved.protocol === "http:") resolved.protocol = "ws:";
+    return resolved.href;
+  }
+
+  function runtimeRoute(kind, logicalUrl, metadata) {
+    const envelope = JSON.stringify({ kind, logicalUrl, metadata });
+    return `${RUNTIME_PREFIX}${kind}/${textToBase64Url(envelope)}`;
+  }
+
+  function processOperation(key) {
+    const op = OPERATIONS[key];
+    const logicalUrl = logicalResolve(op);
+    const rewritten = runtimeRoute(op.kind, logicalUrl, op.metadata);
+
+    const result = {
+      ...op,
+      key,
+      logicalUrl,
+      rewritten,
+      browserHost: new URL(rewritten).host,
+      nativeInvoked: false,
+      networkContacted: false,
+      captured: true
+    };
+
+    state.set(key, result);
+    return result;
+  }
+
+  function describeAction(result) {
+    if (result.kind === "navigate") {
+      return "resolver navegación + reescribir destino";
+    }
+    if (result.kind === "fetch") {
+      return `reescribir URL + conservar mode=${result.metadata.mode}, credentials=${result.metadata.credentials}`;
+    }
+    if (result.kind === "websocket") {
+      return "resolver URL relativa + https→wss + delegar a transporte virtual";
+    }
+    if (result.kind === "worker-import") {
+      return "reescribir URL importada por worker";
+    }
+    if (result.kind === "dom-url") {
+      return "interceptar setter DOM + reescribir valor";
+    }
+    return "reescribir";
+  }
+
+  function renderMatrix() {
+    const body = document.getElementById("matrix-body");
+    body.innerHTML = "";
+
+    for (const [key, op] of Object.entries(OPERATIONS)) {
+      const result = state.get(key);
+      const row = document.createElement("tr");
+      const values = result ? [
+        result.api,
+        `${result.api} ${JSON.stringify(result.raw)}`,
+        result.logicalUrl,
+        describeAction(result),
+        result.rewritten,
+        "CAPTURED / NO NETWORK"
+      ] : [
+        op.api,
+        `${op.api} ${JSON.stringify(op.raw)}`,
+        "—",
+        "—",
+        "—",
+        "Pendiente"
+      ];
+
+      values.forEach((value, index) => {
+        const td = document.createElement("td");
+        td.textContent = value;
+        if (index !== 0) td.classList.add("mono");
+        row.appendChild(td);
+      });
+
+      body.appendChild(row);
+    }
+  }
+
+  function renderDetail(result) {
+    const lines = [
+      `API: ${result.api}`,
+      `input: ${result.raw}`,
+      `logical document: ${LOGICAL_DOCUMENT}`,
+      `logical resolved: ${result.logicalUrl}`,
+      `runtime action: ${describeAction(result)}`,
+      `rewritten route: ${result.rewritten}`,
+      `browser-visible host: ${result.browserHost}`,
+      `native API invoked: NO`,
+      `network request executed: NO`,
+      `logical host contacted: NO`,
+      `metadata: ${JSON.stringify(result.metadata)}`
+    ];
+    document.getElementById("detail").textContent = lines.join("\n");
+  }
+
+  function updateStats() {
+    document.getElementById("captured-count").textContent = `${state.size}/6`;
+    document.getElementById("status").textContent =
+      state.size === 6 ? "OK: runtime cubrió las 6 operaciones" : `${state.size} operaciones procesadas`;
+  }
+
+  function runOperation(key) {
+    const result = processOperation(key);
+    renderMatrix();
+    renderDetail(result);
+    updateStats();
+
+    log(`${result.api}: ${result.raw}`);
+    log(`  logical → ${result.logicalUrl}`);
+    log(`  runtime → ${result.rewritten}`);
+    log(`  native invoked = false; network = false`);
+  }
+
+  async function runAll() {
+    resetLab(false);
+    log("RUN ALL: iniciando las 6 superficies del runtime.");
+
+    for (const key of Object.keys(OPERATIONS)) {
+      runOperation(key);
+      await new Promise(resolve => setTimeout(resolve, 120));
+    }
+
+    log("RESULT: 6/6 APIs capturadas; 0 APIs nativas invocadas; 0 requests reales.");
+  }
+
+  function resetLab(clearLog = true) {
+    state.clear();
+    renderMatrix();
+    document.getElementById("captured-count").textContent = "0/6";
+    document.getElementById("status").textContent = "Sin ejecutar";
+    document.getElementById("detail").textContent = "Sin operaciones.";
+
+    if (clearLog) {
+      document.getElementById("log").textContent = "";
+      log("Fase 6B lista. Ninguna API nativa ha sido invocada.");
+    }
+  }
+
+  resetLab();
+</script>
+</body>
+</html>
