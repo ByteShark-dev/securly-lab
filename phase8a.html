@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 8A - Visibility matrix del filtro</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1240px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    iframe { width: 100%; height: 240px; border: 1px solid #bbb; border-radius: 8px; background: white; }
+    #log { min-height: 360px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    .observed { font-weight: 700; }
+    .model { font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Fase 8A — Visibility matrix del filtro</h1>
+
+  <p>
+    Esta fase cambia de perspectiva: ya no medimos cuánto puede virtualizar nuestro runtime,
+    sino qué información física sigue saliendo del navegador. Los probes usan destinos fijos y
+    benignos. La columna de visibilidad distingue entre <strong>observación directa previa</strong>
+    y <strong>modelo defensivo</strong>; no pretende leer datos internos de la extensión.
+  </p>
+
+  <a class="button" href="./phase7e.html">← Volver a Fase 7E</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    No hay selector de destino, relay nuevo ni rotación de endpoints. Se usan únicamente:
+    <code>wikipedia.org</code>, <code>ws.postman-echo.com</code>, el origen GitHub Pages del laboratorio
+    y una URL lógica ficticia bajo <code>demo.invalid</code> que nunca sale a red.
+  </div>
+
+  <div class="panel">
+    <h2>Control</h2>
+    <button onclick="runAll()">Ejecutar matriz completa</button>
+    <button onclick="testIframe()">Iframe Wikipedia</button>
+    <button onclick="testFetch()">fetch Wikipedia</button>
+    <button onclick="testWebSocket()">WebSocket Echo</button>
+    <button onclick="testSameOrigin()">Same-origin / SW</button>
+    <button onclick="testVirtualOnly()">URL virtual sin red</button>
+    <button onclick="resetLab()">Reiniciar</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Probes live</strong><span id="live-count" class="mono">0/5</span></div>
+    <div class="stat"><strong>Requests físicos iniciados</strong><span id="physical-count" class="mono">0</span></div>
+    <div class="stat"><strong>Hosts físicos distintos</strong><span id="host-count" class="mono">0</span></div>
+    <div class="stat"><strong>URLs solo-runtime</strong><span id="virtual-count" class="mono">0</span></div>
+    <div class="stat"><strong>Bloqueo histórico Securly</strong><span class="mono">workers.dev / Anonymous proxies</span></div>
+    <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+  </div>
+
+  <h2>Matriz</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Caso</th>
+        <th>Hostname físico que sale del navegador</th>
+        <th>URL lógica</th>
+        <th>¿Request físico?</th>
+        <th>Resultado del navegador</th>
+        <th>Visibilidad defensiva</th>
+        <th>Evidencia</th>
+      </tr>
+    </thead>
+    <tbody id="matrix-body"></tbody>
+  </table>
+
+  <h2>Iframe real</h2>
+  <iframe id="wiki-frame" title="Wikipedia probe"></iframe>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const WIKI_URL = 'https://www.wikipedia.org/';
+    const WS_URL = 'wss://ws.postman-echo.com/raw';
+    const LOGICAL_URL = 'https://demo.invalid/api/profile';
+
+    const state = {
+      iframe: null,
+      fetch: null,
+      websocket: null,
+      sameOrigin: null,
+      virtual: null,
+      physicalRequests: 0,
+      physicalHosts: new Set(),
+      virtualOnly: 0
+    };
+
+    const historical = {
+      case: 'Relay Cloudflare Worker (prueba previa)',
+      physicalHost: 'securly-lab.byteshark-dev.workers.dev',
+      logicalUrl: 'https://example.com/ (destino fijo detrás del Worker)',
+      physicalRequest: 'SÍ',
+      browserResult: 'BLOQUEADO por categoría',
+      visibility: 'CONFIRMADA: el endpoint físico fue clasificado',
+      evidence: 'Observación previa: Securly Extension → Anonymous proxies'
+    };
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById('log').textContent += `[${time}] ${message}\n`;
+    }
+
+    function addPhysical(url) {
+      const parsed = new URL(url);
+      state.physicalRequests += 1;
+      state.physicalHosts.add(parsed.hostname);
+      updateStats();
+    }
+
+    function updateStats() {
+      const completed = ['iframe', 'fetch', 'websocket', 'sameOrigin', 'virtual']
+        .filter((key) => state[key] !== null).length;
+      document.getElementById('live-count').textContent = `${completed}/5`;
+      document.getElementById('physical-count').textContent = String(state.physicalRequests);
+      document.getElementById('host-count').textContent = String(state.physicalHosts.size);
+      document.getElementById('virtual-count').textContent = String(state.virtualOnly);
+
+      if (completed === 5) {
+        document.getElementById('result').textContent = 'OK: endpoint físico ≠ URL lógica del runtime';
+      } else {
+        document.getElementById('result').textContent = completed ? 'Prueba en curso' : 'No probado';
+      }
+      renderMatrix();
+    }
+
+    function liveRows() {
+      return [
+        {
+          case: 'Iframe Wikipedia',
+          physicalHost: 'www.wikipedia.org',
+          logicalUrl: WIKI_URL,
+          physicalRequest: state.iframe === null ? 'PENDIENTE' : 'SÍ',
+          browserResult: state.iframe ?? 'PENDIENTE',
+          visibility: 'MODELO: el hostname físico forma parte de la navegación',
+          evidence: 'Probe live del navegador'
+        },
+        {
+          case: 'fetch() Wikipedia',
+          physicalHost: 'www.wikipedia.org',
+          logicalUrl: WIKI_URL,
+          physicalRequest: state.fetch === null ? 'PENDIENTE' : 'SÍ',
+          browserResult: state.fetch ?? 'PENDIENTE',
+          visibility: 'MODELO: el request físico existe aunque CORS impida leerlo',
+          evidence: 'Probe live del navegador'
+        },
+        {
+          case: 'WebSocket Echo',
+          physicalHost: 'ws.postman-echo.com',
+          logicalUrl: WS_URL,
+          physicalRequest: state.websocket === null ? 'PENDIENTE' : 'SÍ',
+          browserResult: state.websocket ?? 'PENDIENTE',
+          visibility: 'MODELO: el endpoint WSS físico sigue siendo el peer de red',
+          evidence: 'Probe live del navegador'
+        },
+        {
+          case: 'Same-origin / Service Worker',
+          physicalHost: location.hostname,
+          logicalUrl: `${location.origin}/securly-lab/lab-message`,
+          physicalRequest: state.sameOrigin === null ? 'PENDIENTE' : 'SÍ / interceptable por SW',
+          browserResult: state.sameOrigin ?? 'PENDIENTE',
+          visibility: 'MODELO: hacia fuera solo existe el origen físico del laboratorio; el SW puede resolver antes de red',
+          evidence: 'Probe live + estado navigator.serviceWorker.controller'
+        },
+        {
+          case: 'Runtime virtual solamente',
+          physicalHost: '(ninguno)',
+          logicalUrl: LOGICAL_URL,
+          physicalRequest: state.virtual === null ? 'PENDIENTE' : 'NO',
+          browserResult: state.virtual ?? 'PENDIENTE',
+          visibility: 'NO HAY REQUEST: una cadena dentro de JS no crea tráfico por sí sola',
+          evidence: 'Probe local; no se invoca API nativa'
+        },
+        historical
+      ];
+    }
+
+    function renderMatrix() {
+      const body = document.getElementById('matrix-body');
+      body.innerHTML = '';
+      liveRows().forEach((item) => {
+        const row = document.createElement('tr');
+        [item.case, item.physicalHost, item.logicalUrl, item.physicalRequest, item.browserResult, item.visibility, item.evidence]
+          .forEach((value, index) => {
+            const cell = document.createElement('td');
+            cell.textContent = value;
+            if ([1, 2, 3, 4].includes(index)) cell.classList.add('mono');
+            if (String(value).startsWith('CONFIRMADA')) cell.classList.add('observed');
+            if (String(value).startsWith('MODELO')) cell.classList.add('model');
+            row.appendChild(cell);
+          });
+        body.appendChild(row);
+      });
+    }
+
+    async function testIframe() {
+      if (state.iframe !== null) return state.iframe;
+      const frame = document.getElementById('wiki-frame');
+      addPhysical(WIKI_URL);
+      log(`IFRAME: navegación física → ${WIKI_URL}`);
+
+      const ok = await new Promise((resolve) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(false);
+        }, 12000);
+        frame.onload = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve(true);
+        };
+        frame.src = `${WIKI_URL}?phase8a=${Date.now()}`;
+      });
+
+      state.iframe = ok ? 'PASS — load' : 'FAIL / timeout';
+      log(`IFRAME: ${state.iframe}. Host físico=${new URL(WIKI_URL).hostname}.`);
+      updateStats();
+      return state.iframe;
+    }
+
+    async function testFetch() {
+      if (state.fetch !== null) return state.fetch;
+      addPhysical(WIKI_URL);
+      log(`FETCH: request físico → ${WIKI_URL}`);
+      try {
+        const response = await fetch(WIKI_URL, { mode: 'cors', credentials: 'omit', cache: 'no-store' });
+        const text = await response.text();
+        state.fetch = `LEGIBLE — HTTP ${response.status}; chars=${text.length}`;
+      } catch (error) {
+        state.fetch = `NO LEGIBLE — ${error.name}: ${error.message}`;
+      }
+      log(`FETCH: ${state.fetch}. Que no sea legible no elimina el request físico.`);
+      updateStats();
+      return state.fetch;
+    }
+
+    async function testWebSocket() {
+      if (state.websocket !== null) return state.websocket;
+      addPhysical(WS_URL);
+      log(`WSS: conexión física → ${WS_URL}`);
+
+      state.websocket = await new Promise((resolve) => {
+        let settled = false;
+        const ws = new WebSocket(WS_URL);
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          try { ws.close(); } catch {}
+          resolve('FAIL / timeout');
+        }, 10000);
+
+        ws.onopen = () => {
+          ws.send('phase8a-visibility-probe');
+        };
+        ws.onmessage = (event) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          const ok = String(event.data).includes('phase8a-visibility-probe');
+          ws.close();
+          resolve(ok ? 'PASS — echo' : 'OPEN — respuesta distinta');
+        };
+        ws.onerror = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve('FAIL — WebSocket error');
+        };
+      });
+
+      log(`WSS: ${state.websocket}. Peer físico=${new URL(WS_URL).hostname}.`);
+      updateStats();
+      return state.websocket;
+    }
+
+    async function testSameOrigin() {
+      if (state.sameOrigin !== null) return state.sameOrigin;
+      const url = `${location.origin}/securly-lab/lab-message?phase=8a&t=${Date.now()}`;
+      addPhysical(url);
+      const controlled = !!navigator.serviceWorker?.controller;
+      log(`SAME-ORIGIN: fetch → ${url}; SW controlled=${controlled}.`);
+      try {
+        const response = await fetch(url, { cache: 'no-store' });
+        const text = await response.text();
+        state.sameOrigin = `${response.ok ? 'PASS' : 'HTTP ' + response.status} — SW=${controlled ? 'CONTROLLED' : 'NO CONTROLLER'}; chars=${text.length}`;
+      } catch (error) {
+        state.sameOrigin = `FAIL — ${error.name}: ${error.message}; SW=${controlled ? 'CONTROLLED' : 'NO CONTROLLER'}`;
+      }
+      log(`SAME-ORIGIN: ${state.sameOrigin}.`);
+      updateStats();
+      return state.sameOrigin;
+    }
+
+    function testVirtualOnly() {
+      if (state.virtual !== null) return state.virtual;
+      const encoded = btoa(LOGICAL_URL).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+      const virtualRoute = `${location.origin}/securly-lab/__runtime_only__/${encoded}`;
+      state.virtualOnly += 1;
+      state.virtual = `CAPTURADA LOCALMENTE — ${virtualRoute}; request nativo=NO`;
+      log(`VIRTUAL: logical=${LOGICAL_URL}; route=${virtualRoute}; no fetch(), no navigation, no WebSocket.`);
+      updateStats();
+      return state.virtual;
+    }
+
+    async function runAll() {
+      resetLab(false);
+      log('RUN ALL: iniciando matriz defensiva 8A.');
+      await testIframe();
+      await testFetch();
+      await testWebSocket();
+      await testSameOrigin();
+      testVirtualOnly();
+      log('RUN ALL: completado. Comparar hostname físico con URL lógica y tipo de evidencia.');
+    }
+
+    function resetLab(clearLog = true) {
+      const frame = document.getElementById('wiki-frame');
+      frame.onload = null;
+      frame.removeAttribute('src');
+
+      state.iframe = null;
+      state.fetch = null;
+      state.websocket = null;
+      state.sameOrigin = null;
+      state.virtual = null;
+      state.physicalRequests = 0;
+      state.physicalHosts = new Set();
+      state.virtualOnly = 0;
+
+      if (clearLog) document.getElementById('log').textContent = '';
+      updateStats();
+      if (clearLog) log('8A lista. Ningún probe live ejecutado todavía.');
+    }
+
+    resetLab();
+  </script>
+</body>
+</html>
