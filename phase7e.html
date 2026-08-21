@@ -194,7 +194,7 @@
       document.getElementById('mutations').appendChild(domNode);
       runtimeEvents.push({ surface: 'DOM mutation', logical: '(local DOM)', route: '(not applicable)', nativeRequest: false });
 
-      virtualize('img.src', '/assets/avatar.png');
+      virtualize('dynamic img.src', '/assets/avatar.png');
       virtualize('fetch', '/api/profile');
       virtualize('XMLHttpRequest', '/api/metrics');
       virtualize('history.pushState', '/settings?tab=privacy');
