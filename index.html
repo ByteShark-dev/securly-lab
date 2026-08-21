@@ -14,13 +14,9 @@
             line-height: 1.5;
         }
 
-        h1, h2 {
-            margin-bottom: 10px;
-        }
+        h1, h2 { margin-bottom: 10px; }
 
-        .info {
-            margin-bottom: 25px;
-        }
+        .info { margin-bottom: 25px; }
 
         .value {
             font-family: monospace;
@@ -56,13 +52,8 @@
             vertical-align: top;
         }
 
-        th {
-            background: #f4f4f4;
-        }
-
-        .result {
-            font-family: monospace;
-        }
+        th { background: #f4f4f4; }
+        .result { font-family: monospace; }
 
         .test-box {
             border: 1px solid #cccccc;
@@ -92,7 +83,7 @@
             color: #eeeeee;
             padding: 15px;
             border-radius: 8px;
-            min-height: 240px;
+            min-height: 280px;
             font-family: monospace;
         }
 
@@ -147,17 +138,15 @@
     </button>
 
     <div class="note">
-        Ya sabemos que <strong>example.com</strong> se permite como navegación,
-        mientras que <strong>neal.fun</strong> se bloquea por categoría.
-        Esta sección conserva esos controles para comparar las pruebas nuevas.
+        <strong>Baseline:</strong> example.com funciona como navegación; neal.fun
+        se bloquea por categoría; el fetch cross-origin a example.com falla por CORS.
     </div>
 
     <h2>Fase 3B — Matriz de tipos de solicitud</h2>
 
     <p>
-        Ahora probamos el dominio bloqueado usando tipos distintos de solicitud.
-        El objetivo no es evitar el filtro, sino comprobar si la extensión trata
-        igual una navegación principal, un subframe y un recurso de imagen.
+        El mismo dominio bloqueado se solicita como navegación principal,
+        subframe y recurso de imagen.
     </p>
 
     <table>
@@ -189,68 +178,109 @@
 
     <div class="test-box">
         <h3>1. Navegación principal</h3>
-
-        <p>
-            Abre <code>neal.fun</code> en una pestaña nueva. Esa pestaña cuenta
-            como navegación principal del documento.
-        </p>
-
-        <button onclick="testBlockedMainFrame()">
-            Probar main_frame
-        </button>
+        <button onclick="testBlockedMainFrame()">Probar main_frame</button>
     </div>
 
     <div class="test-box">
         <h3>2. Subframe / iframe</h3>
-
-        <p>
-            La página intentará insertar <code>neal.fun</code> dentro de esta misma
-            página. Así Chrome genera una solicitud de tipo subframe en vez de una
-            navegación principal.
-        </p>
-
-        <button onclick="testIframe()">
-            Probar iframe
-        </button>
-
-        <button onclick="clearIframe()">
-            Quitar iframe
-        </button>
-
+        <button onclick="testIframe()">Probar iframe</button>
+        <button onclick="clearIframe()">Quitar iframe</button>
         <div id="iframe-container"></div>
     </div>
 
     <div class="test-box">
         <h3>3. Recurso de imagen</h3>
-
-        <p>
-            Esta prueba intenta cargar el favicon de <code>neal.fun</code> como una
-            imagen. No navega hacia la página completa.
-        </p>
-
-        <button onclick="testImage()">
-            Probar imagen
-        </button>
-
+        <button onclick="testImage()">Probar imagen</button>
         <img id="image-preview" alt="Recurso de prueba">
     </div>
 
+    <h2>Fase 4A — Diagnóstico WebSocket</h2>
+
+    <p>
+        Ahora comparamos el acceso normal al host de Postman Echo con una
+        conexión WebSocket segura. Esta prueba no funciona como proxy: solo
+        envía un mensaje al servidor de eco y espera recibir exactamente el
+        mismo mensaje.
+    </p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Prueba</th>
+                <th>Destino</th>
+                <th>Resultado</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>HTTPS / mismo host</td>
+                <td>https://ws.postman-echo.com/raw</td>
+                <td id="result-ws-https" class="result">No probado</td>
+            </tr>
+            <tr>
+                <td>WebSocket handshake</td>
+                <td>wss://ws.postman-echo.com/raw</td>
+                <td id="result-ws-handshake" class="result">No probado</td>
+            </tr>
+            <tr>
+                <td>WebSocket echo</td>
+                <td>mensaje de laboratorio</td>
+                <td id="result-ws-echo" class="result">No probado</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div class="test-box">
+        <h3>4. HTTPS al host de WebSocket</h3>
+        <p>
+            Abre el mismo hostname usando HTTPS normal. Aunque el servidor pueda
+            responder con un error HTTP por esperar un upgrade, nos sirve para ver
+            si Securly permite llegar al host.
+        </p>
+        <button onclick="testWebSocketHostHttps()">
+            Abrir host como HTTPS
+        </button>
+    </div>
+
+    <div class="test-box">
+        <h3>5. WebSocket Echo</h3>
+        <p>
+            Chrome intentará abrir una conexión <code>wss://</code>. Si abre,
+            enviará un identificador único y comprobará que el servidor lo devuelve.
+            La prueba se cancela automáticamente después de 8 segundos.
+        </p>
+
+        <button onclick="testWebSocket()">
+            Probar WebSocket
+        </button>
+
+        <button onclick="closeWebSocket()">
+            Cerrar WebSocket
+        </button>
+    </div>
+
     <div class="note">
-        Importante: que un iframe dispare su evento <code>load</code> no demuestra
-        necesariamente que cargó el sitio original; podría haber cargado una página
-        de bloqueo. Por eso la zona del iframe queda visible para inspeccionarla.
-        Del mismo modo, un fallo de imagen solo nos dice que el recurso no pudo
-        cargarse correctamente; después interpretaremos el resultado junto con la
-        página de bloqueo de Securly.
+        Interpretación: si HTTPS y WSS fallan por categoría, el endpoint está siendo
+        filtrado. Si HTTPS llega al host pero WSS falla, hay una diferencia de
+        protocolo/handshake que merece estudiar. Si WSS abre y devuelve el mensaje,
+        confirmamos que el navegador puede mantener una conexión WebSocket en este
+        entorno.
     </div>
 
     <h2>Log</h2>
 
     <button onclick="clearLog()">Limpiar log</button>
-
     <div id="log"></div>
 
     <script>
+        const WS_URL = "wss://ws.postman-echo.com/raw";
+        const WS_HTTPS_URL = "https://ws.postman-echo.com/raw";
+
+        let labSocket = null;
+        let wsTimeout = null;
+        let wsExpectedMessage = null;
+        let wsStartedAt = null;
+
         /* =========================================================
          * INFORMACIÓN DEL CONTEXTO
          * ========================================================= */
@@ -267,7 +297,6 @@
         document.getElementById("ws-support").textContent =
             "WebSocket" in window ? "Disponible" : "No disponible";
 
-
         /* =========================================================
          * LOG
          * ========================================================= */
@@ -275,14 +304,12 @@
         function log(message) {
             const output = document.getElementById("log");
             const time = new Date().toLocaleTimeString();
-
             output.textContent += `[${time}] ${message}\n`;
         }
 
         function clearLog() {
             document.getElementById("log").textContent = "";
         }
-
 
         /* =========================================================
          * SERVICE WORKER
@@ -304,7 +331,6 @@
 
                 await navigator.serviceWorker.ready;
                 updateServiceWorkerStatus();
-
             } catch (error) {
                 document.getElementById("sw-status").textContent = "Error";
                 log(`Error registrando Service Worker: ${error.message}`);
@@ -312,23 +338,17 @@
         }
 
         function updateServiceWorkerStatus() {
-            if (navigator.serviceWorker.controller) {
-                document.getElementById("sw-status").textContent =
-                    "Activo y controlando esta página";
-            } else {
-                document.getElementById("sw-status").textContent =
-                    "Registrado, recarga la página";
-            }
+            document.getElementById("sw-status").textContent =
+                navigator.serviceWorker.controller
+                    ? "Activo y controlando esta página"
+                    : "Registrado, recarga la página";
         }
 
         if ("serviceWorker" in navigator) {
-            navigator.serviceWorker.addEventListener(
-                "controllerchange",
-                () => {
-                    log("Cambio de controlador detectado.");
-                    updateServiceWorkerStatus();
-                }
-            );
+            navigator.serviceWorker.addEventListener("controllerchange", () => {
+                log("Cambio de controlador detectado.");
+                updateServiceWorkerStatus();
+            });
         }
 
         async function testServiceWorker() {
@@ -337,18 +357,15 @@
             try {
                 const response = await fetch("./lab-message");
                 const data = await response.json();
-
                 log(`HTTP status: ${response.status}`);
                 log(JSON.stringify(data, null, 2));
-
             } catch (error) {
                 log(`Service Worker ERROR: ${error.message}`);
             }
         }
 
-
         /* =========================================================
-         * CONTROL CORS YA CONOCIDO
+         * CONTROL CORS
          * ========================================================= */
 
         async function testDirectFetch() {
@@ -357,10 +374,8 @@
             try {
                 const response = await fetch("https://example.com/");
                 const text = await response.text();
-
                 log(`HTTP status: ${response.status}`);
                 log(`Respuesta leída: ${text.length} caracteres`);
-
             } catch (error) {
                 log("Fetch directo falló.");
                 log(`Tipo: ${error.name}`);
@@ -368,26 +383,22 @@
             }
         }
 
-
         /* =========================================================
          * MAIN FRAME
          * ========================================================= */
 
         function openMainFrame(url, label) {
             log(`Abriendo navegación principal → ${label}`);
-
-            // Al ejecutarse desde un clic, Chrome permite abrir la pestaña nueva.
             window.open(url, "_blank", "noopener,noreferrer");
         }
 
         function testBlockedMainFrame() {
             document.getElementById("result-main").textContent =
-                "Pestaña abierta; comprobar si aparece la página de bloqueo";
+                "Pestaña abierta; comprobar resultado";
 
             log("MAIN_FRAME → https://neal.fun/");
             openMainFrame("https://neal.fun/", "neal.fun");
         }
-
 
         /* =========================================================
          * SUBFRAME / IFRAME
@@ -397,22 +408,17 @@
             const container = document.getElementById("iframe-container");
             const result = document.getElementById("result-iframe");
 
-            // Eliminar pruebas anteriores para generar una solicitud nueva.
             container.innerHTML = "";
 
             const iframe = document.createElement("iframe");
             iframe.title = "Neal.fun subframe test";
-
             result.textContent = "Solicitando...";
             log("SUB_FRAME → https://neal.fun/");
 
             iframe.addEventListener("load", () => {
                 result.textContent =
-                    "Evento load recibido; inspeccionar visualmente el iframe";
-
-                log(
-                    "IFRAME: evento load recibido. Puede ser el destino o una block page."
-                );
+                    "Evento load recibido; inspeccionar visualmente";
+                log("IFRAME: evento load recibido.");
             });
 
             iframe.addEventListener("error", () => {
@@ -430,7 +436,6 @@
             log("Iframe eliminado.");
         }
 
-
         /* =========================================================
          * IMAGE REQUEST
          * ========================================================= */
@@ -441,12 +446,7 @@
 
             result.textContent = "Solicitando...";
             image.style.display = "none";
-
             log("IMAGE → https://neal.fun/favicon.ico");
-
-            // Añadimos un parámetro para evitar reutilizar una respuesta cacheada.
-            const testUrl =
-                `https://neal.fun/favicon.ico?lab=${Date.now()}`;
 
             image.onload = () => {
                 result.textContent = "Imagen cargada";
@@ -460,15 +460,153 @@
                 log("IMAGE: el recurso no pudo cargarse.");
             };
 
-            image.src = testUrl;
+            image.src = `https://neal.fun/favicon.ico?lab=${Date.now()}`;
         }
 
+        /* =========================================================
+         * FASE 4A — HTTPS + WEBSOCKET
+         * ========================================================= */
+
+        function testWebSocketHostHttps() {
+            document.getElementById("result-ws-https").textContent =
+                "Pestaña abierta; observar si llega al host o aparece bloqueo";
+
+            log(`HTTPS CONTROL → ${WS_HTTPS_URL}`);
+            window.open(WS_HTTPS_URL, "_blank", "noopener,noreferrer");
+        }
+
+        function testWebSocket() {
+            const handshakeResult =
+                document.getElementById("result-ws-handshake");
+
+            const echoResult =
+                document.getElementById("result-ws-echo");
+
+            if (!("WebSocket" in window)) {
+                handshakeResult.textContent = "API WebSocket no disponible";
+                log("WEBSOCKET: API no disponible.");
+                return;
+            }
+
+            closeWebSocket(false);
+
+            handshakeResult.textContent = "Conectando...";
+            echoResult.textContent = "Esperando handshake...";
+            wsStartedAt = performance.now();
+            wsExpectedMessage = `byteshark-ws-lab-${Date.now()}`;
+
+            log(`WEBSOCKET: intentando conectar → ${WS_URL}`);
+
+            try {
+                labSocket = new WebSocket(WS_URL);
+            } catch (error) {
+                handshakeResult.textContent = `Error al crear socket: ${error.message}`;
+                echoResult.textContent = "No ejecutado";
+                log(`WEBSOCKET: excepción inmediata → ${error.message}`);
+                return;
+            }
+
+            wsTimeout = setTimeout(() => {
+                if (
+                    labSocket &&
+                    (labSocket.readyState === WebSocket.CONNECTING ||
+                     labSocket.readyState === WebSocket.OPEN)
+                ) {
+                    handshakeResult.textContent =
+                        "Timeout de 8 s; conexión no completó la prueba";
+                    echoResult.textContent = "Timeout";
+                    log("WEBSOCKET: timeout de 8 segundos.");
+                    labSocket.close();
+                }
+            }, 8000);
+
+            labSocket.addEventListener("open", () => {
+                const elapsed = Math.round(performance.now() - wsStartedAt);
+                handshakeResult.textContent = `OPEN en ${elapsed} ms`;
+                echoResult.textContent = "Mensaje enviado; esperando eco...";
+
+                log(`WEBSOCKET: OPEN (${elapsed} ms)`);
+                log(`WEBSOCKET: enviando → ${wsExpectedMessage}`);
+
+                labSocket.send(wsExpectedMessage);
+            });
+
+            labSocket.addEventListener("message", (event) => {
+                const received = String(event.data);
+                log(`WEBSOCKET: mensaje recibido → ${received}`);
+
+                if (received === wsExpectedMessage) {
+                    echoResult.textContent = "Eco correcto: mensaje idéntico recibido";
+                    log("WEBSOCKET: ECHO OK.");
+                } else {
+                    echoResult.textContent = "Respuesta recibida, pero no coincide";
+                    log("WEBSOCKET: respuesta distinta al mensaje enviado.");
+                }
+
+                if (wsTimeout) {
+                    clearTimeout(wsTimeout);
+                    wsTimeout = null;
+                }
+            });
+
+            labSocket.addEventListener("error", () => {
+                handshakeResult.textContent =
+                    "Evento error; el navegador no expone el motivo exacto";
+
+                if (echoResult.textContent.includes("Esperando")) {
+                    echoResult.textContent = "No ejecutado";
+                }
+
+                log("WEBSOCKET: evento error.");
+            });
+
+            labSocket.addEventListener("close", (event) => {
+                if (wsTimeout) {
+                    clearTimeout(wsTimeout);
+                    wsTimeout = null;
+                }
+
+                log(
+                    `WEBSOCKET: CLOSE code=${event.code}, clean=${event.wasClean}, reason=${event.reason || "(vacío)"}`
+                );
+
+                if (
+                    handshakeResult.textContent === "Conectando..." ||
+                    handshakeResult.textContent.startsWith("Evento error")
+                ) {
+                    handshakeResult.textContent =
+                        `Cerrado sin abrir: code=${event.code}, clean=${event.wasClean}`;
+                }
+            });
+        }
+
+        function closeWebSocket(writeLog = true) {
+            if (wsTimeout) {
+                clearTimeout(wsTimeout);
+                wsTimeout = null;
+            }
+
+            if (labSocket) {
+                if (
+                    labSocket.readyState === WebSocket.CONNECTING ||
+                    labSocket.readyState === WebSocket.OPEN
+                ) {
+                    labSocket.close(1000, "Lab complete");
+                }
+
+                labSocket = null;
+
+                if (writeLog) {
+                    log("WEBSOCKET: cierre solicitado por el usuario.");
+                }
+            }
+        }
 
         /* =========================================================
          * INICIO
          * ========================================================= */
 
-        log("Web Filtering Lab iniciado — Fase 3B.");
+        log("Web Filtering Lab iniciado — Fase 4A.");
         registerServiceWorker();
     </script>
 </body>
