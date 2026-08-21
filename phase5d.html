@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 5D - Wisp dentro del Transport Adapter</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 1120px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+        h1, h2, h3 { margin-bottom: 10px; }
+        .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+        .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+        button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+        .stats, .chain { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 10px; margin: 15px 0; }
+        .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+        .stat strong { display: block; margin-bottom: 5px; }
+        .chain-step { border: 1px solid #ccc; border-radius: 8px; padding: 12px; }
+        .mono, code { font-family: monospace; word-break: break-all; }
+        .box { background: #f7f7f7; border-radius: 8px; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+        th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+        th { background: #f4f4f4; }
+        #log { min-height: 360px; background: #111; color: #eee; padding: 15px; border-radius: 8px; font-family: monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    </style>
+</head>
+<body>
+    <h1>Fase 5D — Wisp dentro del Transport Adapter</h1>
+
+    <p>
+        Esta fase une el routing de 5C con el wire format de Wisp que estudiamos en 4D.
+        El Service Worker recupera una URL lógica fija y se la entrega a esta página.
+        El adapter crea tres frames Wisp v2: CONNECT, DATA y CLOSE; Postman Echo solo
+        transporta sus bytes codificados como Base64 y después el adapter los decodifica.
+    </p>
+
+    <a class="button" href="./phase5c.html">← Volver a Fase 5C</a>
+    <a class="button" href="./phase4d.html">Revisar Fase 4D</a>
+    <a class="button" href="./">Laboratorio principal</a>
+
+    <div class="note">
+        Esto NO es un servidor Wisp funcional ni un proxy. <code>demo.invalid</code>
+        aparece únicamente dentro de los bytes del frame CONNECT. Postman Echo no
+        interpreta Wisp y nadie abre una conexión TCP hacia ese hostname.
+    </div>
+
+    <h2>Cadena de la prueba</h2>
+    <div class="chain">
+        <div class="chain-step"><strong>1. Rewriter</strong><div class="mono">/__lab_wisp__/...</div></div>
+        <div class="chain-step"><strong>2. Service Worker</strong><div class="mono">decode + MessageChannel</div></div>
+        <div class="chain-step"><strong>3. Wisp adapter</strong><div class="mono">CONNECT + DATA + CLOSE</div></div>
+        <div class="chain-step"><strong>4. Transporte</strong><div class="mono">Base64 → WebSocket Echo</div></div>
+        <div class="chain-step"><strong>5. Decoder</strong><div class="mono">bytes → frames Wisp</div></div>
+        <div class="chain-step"><strong>6. Regreso</strong><div class="mono">adapter → SW → fetch()</div></div>
+    </div>
+
+    <div class="panel">
+        <h2>Control</h2>
+        <button onclick="prepareServiceWorker()">1. Preparar SW 5D</button>
+        <button onclick="registerWispAdapter()">2. Registrar Wisp adapter</button>
+        <button onclick="openTransportSocket()">3. Abrir WebSocket</button>
+        <button onclick="buildWispUrl()">4. Construir ruta</button>
+        <button onclick="performWispRequest()">5. Hacer request completo</button>
+        <button onclick="runFullTest()">Ejecutar todo</button>
+        <button onclick="resetLab()">Reiniciar</button>
+    </div>
+
+    <div class="stats">
+        <div class="stat"><strong>Service Worker</strong><span id="sw-status" class="mono">No comprobado</span></div>
+        <div class="stat"><strong>Wisp adapter</strong><span id="adapter-status" class="mono">No registrado</span></div>
+        <div class="stat"><strong>WebSocket</strong><span id="ws-status" class="mono">CLOSED</span></div>
+        <div class="stat"><strong>Frames construidos</strong><span id="built-count" class="mono">0</span></div>
+        <div class="stat"><strong>Frames eco</strong><span id="echo-count" class="mono">0</span></div>
+        <div class="stat"><strong>Bytes idénticos</strong><span id="identical-count" class="mono">0/0</span></div>
+        <div class="stat"><strong>Destino lógico contactado</strong><span class="mono">NO</span></div>
+        <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+    </div>
+
+    <h2>Solicitud lógica</h2>
+    <table>
+        <tbody>
+            <tr><th>URL lógica fija</th><td class="mono">https://demo.invalid/img/logo.png</td></tr>
+            <tr><th>URL visible a Chrome</th><td id="wisp-url" class="mono">—</td></tr>
+            <tr><th>Host visible a Chrome</th><td id="browser-host" class="mono">—</td></tr>
+            <tr><th>Stream Wisp simulado</th><td class="mono">7</td></tr>
+            <tr><th>Endpoint real de red</th><td class="mono">wss://ws.postman-echo.com/raw</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Frames Wisp</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Tipo</th>
+                <th>Bytes</th>
+                <th>Contenido decodificado</th>
+                <th>Eco idéntico</th>
+            </tr>
+        </thead>
+        <tbody id="frames-body">
+            <tr><td colspan="5">Aún no se han construido frames.</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Respuesta final del Service Worker</h2>
+    <div id="response-box" class="box">Sin respuesta.</div>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+
+    <script>
+        const LOGICAL_URL = "https://demo.invalid/img/logo.png";
+        const WS_URL = "wss://ws.postman-echo.com/raw";
+        const WISP_PREFIX = `${location.origin}/securly-lab/__lab_wisp__/`;
+        const STREAM_ID = 7;
+
+        const TYPE_CONNECT = 0x01;
+        const TYPE_DATA = 0x02;
+        const TYPE_CLOSE = 0x04;
+
+        const textEncoder = new TextEncoder();
+        const textDecoder = new TextDecoder();
+
+        let swReady = false;
+        let adapterReady = false;
+        let wispUrl = "";
+        let channel = null;
+        let adapterPort = null;
+        let socket = null;
+        let socketOpenPromise = null;
+        let builtFrames = [];
+        let echoedFrames = 0;
+        let identicalFrames = 0;
+        const wsPending = new Map();
+
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            document.getElementById("log").textContent += `[${time}] ${message}\n`;
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        function updateCounters() {
+            document.getElementById("built-count").textContent = String(builtFrames.length);
+            document.getElementById("echo-count").textContent = String(echoedFrames);
+            document.getElementById("identical-count").textContent = `${identicalFrames}/${builtFrames.length}`;
+        }
+
+        function concatBytes(...parts) {
+            const total = parts.reduce((sum, part) => sum + part.length, 0);
+            const result = new Uint8Array(total);
+            let offset = 0;
+            for (const part of parts) {
+                result.set(part, offset);
+                offset += part.length;
+            }
+            return result;
+        }
+
+        function makeHeader(type, streamId) {
+            const header = new Uint8Array(5);
+            header[0] = type;
+            new DataView(header.buffer).setUint32(1, streamId, true);
+            return header;
+        }
+
+        function encodeConnect(streamId, hostname, port) {
+            const hostBytes = textEncoder.encode(hostname);
+            const prefix = new Uint8Array(3);
+            prefix[0] = 0x01; // TCP
+            new DataView(prefix.buffer).setUint16(1, port, true);
+            return concatBytes(makeHeader(TYPE_CONNECT, streamId), prefix, hostBytes);
+        }
+
+        function encodeData(streamId, payloadText) {
+            return concatBytes(makeHeader(TYPE_DATA, streamId), textEncoder.encode(payloadText));
+        }
+
+        function encodeClose(streamId, reason = 0x02) {
+            return concatBytes(makeHeader(TYPE_CLOSE, streamId), new Uint8Array([reason]));
+        }
+
+        function typeName(type) {
+            if (type === TYPE_CONNECT) return "CONNECT";
+            if (type === TYPE_DATA) return "DATA";
+            if (type === TYPE_CLOSE) return "CLOSE";
+            return `UNKNOWN(0x${type.toString(16)})`;
+        }
+
+        function decodeFrame(bytes) {
+            if (bytes.length < 5) return { valid: false, error: "Frame demasiado corto" };
+
+            const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+            const type = bytes[0];
+            const streamId = view.getUint32(1, true);
+            const payload = bytes.slice(5);
+            const frame = {
+                valid: true,
+                type,
+                typeName: typeName(type),
+                streamId,
+                byteLength: bytes.length
+            };
+
+            if (type === TYPE_CONNECT) {
+                if (payload.length < 3) return { ...frame, valid: false, error: "CONNECT incompleto" };
+                const payloadView = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+                frame.streamType = payload[0] === 0x01 ? "TCP" : payload[0] === 0x02 ? "UDP" : `0x${payload[0].toString(16)}`;
+                frame.port = payloadView.getUint16(1, true);
+                frame.hostname = textDecoder.decode(payload.slice(3));
+            } else if (type === TYPE_DATA) {
+                frame.dataText = textDecoder.decode(payload);
+            } else if (type === TYPE_CLOSE) {
+                if (payload.length < 1) return { ...frame, valid: false, error: "CLOSE incompleto" };
+                frame.reason = payload[0];
+            }
+
+            return frame;
+        }
+
+        function bytesToBase64(bytes) {
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary);
+        }
+
+        function base64ToBytes(base64) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return bytes;
+        }
+
+        function bytesToBase64Url(text) {
+            const bytes = textEncoder.encode(text);
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+        }
+
+        function bytesEqual(a, b) {
+            if (a.length !== b.length) return false;
+            for (let i = 0; i < a.length; i++) {
+                if (a[i] !== b[i]) return false;
+            }
+            return true;
+        }
+
+        function bytesToHex(bytes) {
+            return Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join(" ");
+        }
+
+        function describeDecoded(frame) {
+            if (!frame.valid) return `ERROR: ${frame.error}`;
+            if (frame.typeName === "CONNECT") {
+                return `stream=${frame.streamId}; ${frame.streamType}; ${frame.hostname}:${frame.port}`;
+            }
+            if (frame.typeName === "DATA") {
+                return `stream=${frame.streamId}; ${JSON.stringify(frame.dataText)}`;
+            }
+            if (frame.typeName === "CLOSE") {
+                return `stream=${frame.streamId}; reason=0x${frame.reason.toString(16).padStart(2, "0")}`;
+            }
+            return `stream=${frame.streamId}`;
+        }
+
+        function buildFrames() {
+            const parsed = new URL(LOGICAL_URL);
+            const port = parsed.port ? Number(parsed.port) : 443;
+            const payload = `GET ${parsed.pathname} LAB/1.0`;
+
+            builtFrames = [
+                { index: 0, label: "CONNECT", bytes: encodeConnect(STREAM_ID, parsed.hostname, port), echoIdentical: null },
+                { index: 1, label: "DATA", bytes: encodeData(STREAM_ID, payload), echoIdentical: null },
+                { index: 2, label: "CLOSE", bytes: encodeClose(STREAM_ID, 0x02), echoIdentical: null }
+            ];
+
+            echoedFrames = 0;
+            identicalFrames = 0;
+            renderFrames();
+            updateCounters();
+            log(`WISP: construidos ${builtFrames.length} frames para stream ${STREAM_ID}.`);
+            return builtFrames;
+        }
+
+        function renderFrames() {
+            const body = document.getElementById("frames-body");
+            body.innerHTML = "";
+
+            if (builtFrames.length === 0) {
+                body.innerHTML = '<tr><td colspan="5">Aún no se han construido frames.</td></tr>';
+                return;
+            }
+
+            builtFrames.forEach((item, index) => {
+                const decoded = item.echoDecoded || decodeFrame(item.bytes);
+                const row = document.createElement("tr");
+
+                const values = [
+                    String(index + 1),
+                    item.label,
+                    `${item.bytes.length} bytes\n${bytesToHex(item.bytes)}`,
+                    describeDecoded(decoded),
+                    item.echoIdentical === null ? "Pendiente" : item.echoIdentical ? "SÍ" : "NO"
+                ];
+
+                values.forEach((value, cellIndex) => {
+                    const cell = document.createElement("td");
+                    cell.textContent = value;
+                    if (cellIndex >= 1) cell.classList.add("mono");
+                    row.appendChild(cell);
+                });
+
+                body.appendChild(row);
+            });
+        }
+
+        async function probeWorker() {
+            try {
+                const response = await fetch(`./lab-message?phase=5d&t=${Date.now()}`, { cache: "no-store" });
+                if (!response.ok) return null;
+                const data = await response.json();
+                if (
+                    data.source === "service-worker" &&
+                    Array.isArray(data.swFeatures) &&
+                    data.swFeatures.includes("5D")
+                ) return data;
+                return null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        async function prepareServiceWorker() {
+            if (!("serviceWorker" in navigator)) {
+                document.getElementById("sw-status").textContent = "No soportado";
+                return false;
+            }
+
+            document.getElementById("sw-status").textContent = "Actualizando...";
+            log("SW: registrando ./sw.js y buscando capacidad 5D.");
+
+            try {
+                const registration = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" });
+                await registration.update();
+                await navigator.serviceWorker.ready;
+
+                for (let attempt = 1; attempt <= 35; attempt++) {
+                    const info = await probeWorker();
+                    if (info && navigator.serviceWorker.controller) {
+                        swReady = true;
+                        document.getElementById("sw-status").textContent = `Activo — ${info.swVersion}`;
+                        log(`SW: capacidad 5D confirmada en intento ${attempt}.`);
+                        return true;
+                    }
+                    await sleep(200);
+                }
+
+                document.getElementById("sw-status").textContent = "5D no confirmado";
+                return false;
+            } catch (error) {
+                document.getElementById("sw-status").textContent = "ERROR";
+                log(`SW: ${error.message}`);
+                return false;
+            }
+        }
+
+        async function registerWispAdapter() {
+            if (!swReady) {
+                const ready = await prepareServiceWorker();
+                if (!ready) return false;
+            }
+
+            if (!navigator.serviceWorker.controller) return false;
+
+            if (adapterPort) {
+                try { adapterPort.close(); } catch (_) {}
+            }
+
+            channel = new MessageChannel();
+            adapterPort = channel.port1;
+
+            return new Promise((resolve) => {
+                const timeoutId = setTimeout(() => {
+                    document.getElementById("adapter-status").textContent = "Timeout";
+                    resolve(false);
+                }, 4000);
+
+                adapterPort.onmessage = async (event) => {
+                    const message = event.data;
+
+                    if (message?.type === "5d-wisp-registered") {
+                        clearTimeout(timeoutId);
+                        adapterReady = true;
+                        document.getElementById("adapter-status").textContent = "Registrado";
+                        log(`ADAPTER: Wisp adapter registrado en SW ${message.swVersion}.`);
+                        resolve(true);
+                        return;
+                    }
+
+                    if (message?.type === "5d-wisp-request") {
+                        await handleWispRequest(message);
+                    }
+                };
+
+                adapterPort.start();
+                navigator.serviceWorker.controller.postMessage(
+                    { type: "register-5d-wisp-transport" },
+                    [channel.port2]
+                );
+
+                document.getElementById("adapter-status").textContent = "Registrando...";
+                log("ADAPTER: MessagePort 5D enviado al Service Worker.");
+            });
+        }
+
+        async function openTransportSocket() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                document.getElementById("ws-status").textContent = "OPEN";
+                return true;
+            }
+
+            if (socketOpenPromise) return socketOpenPromise;
+
+            document.getElementById("ws-status").textContent = "CONNECTING";
+            log(`WS: conectando solamente a ${WS_URL}`);
+
+            socketOpenPromise = new Promise((resolve) => {
+                let settled = false;
+                const timeoutId = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    socketOpenPromise = null;
+                    document.getElementById("ws-status").textContent = "TIMEOUT";
+                    resolve(false);
+                }, 8000);
+
+                try {
+                    socket = new WebSocket(WS_URL);
+                } catch (error) {
+                    clearTimeout(timeoutId);
+                    settled = true;
+                    socketOpenPromise = null;
+                    document.getElementById("ws-status").textContent = "ERROR";
+                    log(`WS: ${error.message}`);
+                    resolve(false);
+                    return;
+                }
+
+                socket.addEventListener("open", () => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeoutId);
+                    socketOpenPromise = null;
+                    document.getElementById("ws-status").textContent = "OPEN";
+                    log("WS: OPEN.");
+                    resolve(true);
+                });
+
+                socket.addEventListener("message", (event) => {
+                    let envelope;
+                    try {
+                        envelope = JSON.parse(String(event.data));
+                    } catch (_) {
+                        return;
+                    }
+
+                    if (envelope?.lab !== "5D") return;
+                    const key = `${envelope.requestId}:${envelope.frameIndex}`;
+                    if (!wsPending.has(key)) return;
+
+                    const pending = wsPending.get(key);
+                    wsPending.delete(key);
+                    clearTimeout(pending.timeoutId);
+                    pending.resolve(envelope);
+                });
+
+                socket.addEventListener("close", (event) => {
+                    document.getElementById("ws-status").textContent = `CLOSED (${event.code})`;
+                    log(`WS: CLOSE code=${event.code}, clean=${event.wasClean}`);
+                });
+
+                socket.addEventListener("error", () => {
+                    document.getElementById("ws-status").textContent = "ERROR";
+                    log("WS: evento error.");
+                });
+            });
+
+            return socketOpenPromise;
+        }
+
+        function sendFrameAndWait(requestId, frameIndex, bytes) {
+            const key = `${requestId}:${frameIndex}`;
+            const envelope = {
+                lab: "5D",
+                requestId,
+                frameIndex,
+                frameBase64: bytesToBase64(bytes)
+            };
+
+            return new Promise((resolve, reject) => {
+                const timeoutId = setTimeout(() => {
+                    wsPending.delete(key);
+                    reject(new Error(`Timeout esperando frame ${frameIndex + 1}.`));
+                }, 7000);
+
+                wsPending.set(key, { resolve, reject, timeoutId });
+                socket.send(JSON.stringify(envelope));
+            });
+        }
+
+        async function handleWispRequest(message) {
+            log(`ADAPTER RX: id=${message.id} ${message.method} ${message.logicalUrl}`);
+
+            if (message.logicalUrl !== LOGICAL_URL || message.method !== "GET") {
+                adapterPort.postMessage({
+                    type: "5d-wisp-response",
+                    id: message.id,
+                    ok: false,
+                    error: "Solicitud fuera del escenario fijo 5D."
+                });
+                return;
+            }
+
+            buildFrames();
+
+            const opened = await openTransportSocket();
+            if (!opened) {
+                adapterPort.postMessage({
+                    type: "5d-wisp-response",
+                    id: message.id,
+                    ok: false,
+                    error: "No se pudo abrir WebSocket Echo."
+                });
+                return;
+            }
+
+            const decodedTypes = [];
+
+            try {
+                for (const item of builtFrames) {
+                    log(`WISP TX: ${item.label}, ${item.bytes.length} bytes → Base64 text.`);
+                    const echoedEnvelope = await sendFrameAndWait(message.id, item.index, item.bytes);
+                    const echoedBytes = base64ToBytes(echoedEnvelope.frameBase64);
+                    const identical = bytesEqual(item.bytes, echoedBytes);
+                    const decoded = decodeFrame(echoedBytes);
+
+                    item.echoIdentical = identical;
+                    item.echoDecoded = decoded;
+                    echoedFrames += 1;
+                    if (identical) identicalFrames += 1;
+                    decodedTypes.push(decoded.typeName);
+                    updateCounters();
+                    renderFrames();
+
+                    log(`WISP RX: ${item.label}; idéntico=${identical}; decode=${describeDecoded(decoded)}`);
+                }
+
+                const connect = builtFrames[0].echoDecoded;
+                const data = builtFrames[1].echoDecoded;
+                const close = builtFrames[2].echoDecoded;
+
+                const valid =
+                    identicalFrames === 3 &&
+                    connect.valid && connect.typeName === "CONNECT" && connect.streamId === STREAM_ID &&
+                    connect.streamType === "TCP" && connect.hostname === "demo.invalid" && connect.port === 443 &&
+                    data.valid && data.typeName === "DATA" && data.streamId === STREAM_ID &&
+                    data.dataText === "GET /img/logo.png LAB/1.0" &&
+                    close.valid && close.typeName === "CLOSE" && close.streamId === STREAM_ID && close.reason === 0x02;
+
+                adapterPort.postMessage({
+                    type: "5d-wisp-response",
+                    id: message.id,
+                    ok: valid,
+                    endpoint: "ws.postman-echo.com",
+                    streamId: STREAM_ID,
+                    framesBuilt: builtFrames.length,
+                    framesEchoed: echoedFrames,
+                    framesByteIdentical: identicalFrames,
+                    decodedTypes,
+                    error: valid ? null : "La validación de frames Wisp no coincidió."
+                });
+
+                log(`ADAPTER → SW: valid=${valid}; frames=${echoedFrames}; identical=${identicalFrames}.`);
+            } catch (error) {
+                adapterPort.postMessage({
+                    type: "5d-wisp-response",
+                    id: message.id,
+                    ok: false,
+                    error: error.message
+                });
+                log(`ADAPTER: error → ${error.message}`);
+            }
+        }
+
+        function buildWispUrl() {
+            wispUrl = WISP_PREFIX + bytesToBase64Url(LOGICAL_URL);
+            document.getElementById("wisp-url").textContent = wispUrl;
+            document.getElementById("browser-host").textContent = new URL(wispUrl).host;
+            log(`REWRITE 5D: ${LOGICAL_URL}`);
+            log(`BROWSER URL: ${wispUrl}`);
+            return wispUrl;
+        }
+
+        async function performWispRequest() {
+            if (!swReady) {
+                const ready = await prepareServiceWorker();
+                if (!ready) return false;
+            }
+            if (!adapterReady) {
+                const registered = await registerWispAdapter();
+                if (!registered) return false;
+            }
+            if (!wispUrl) buildWispUrl();
+
+            document.getElementById("result").textContent = "Request en curso";
+            log("PAGE: fetch REAL a la ruta __lab_wisp__ del mismo origen.");
+
+            try {
+                const response = await fetch(wispUrl, { cache: "no-store" });
+                const data = await response.json();
+                document.getElementById("response-box").textContent = JSON.stringify(data, null, 2);
+
+                const checks = {
+                    httpOk: response.ok,
+                    fromSw: data.source === "service-worker",
+                    feature5d: Array.isArray(data.swFeatures) && data.swFeatures.includes("5D"),
+                    intercepted: data.intercepted === true,
+                    logicalUrl: data.logicalUrl === LOGICAL_URL,
+                    wispTransported: data.wispTransported === true,
+                    threeBuilt: data.transport?.framesBuilt === 3,
+                    threeEchoed: data.transport?.framesEchoed === 3,
+                    threeIdentical: data.transport?.framesByteIdentical === 3,
+                    types: JSON.stringify(data.transport?.decodedTypes) === JSON.stringify(["CONNECT", "DATA", "CLOSE"]),
+                    noRemote: data.remoteDestinationContacted === false,
+                    synthetic: data.syntheticResponse === true
+                };
+
+                const passed = Object.values(checks).every(Boolean);
+                log(`PAGE: HTTP ${response.status}.`);
+                log(`VERIFY: ${JSON.stringify(checks)}`);
+
+                document.getElementById("result").textContent = passed
+                    ? "OK: SW → Wisp frames → WS → decode → SW"
+                    : "Respuesta recibida; revisar verificaciones";
+
+                if (passed) log("RESULT: cadena 5D validada.");
+                return passed;
+            } catch (error) {
+                document.getElementById("result").textContent = "Request falló";
+                log(`PAGE: ${error.message}`);
+                return false;
+            }
+        }
+
+        async function runFullTest() {
+            resetLab(false);
+            log("FULL TEST: iniciando Fase 5D.");
+
+            if (!(await prepareServiceWorker())) return;
+            if (!(await registerWispAdapter())) return;
+            if (!(await openTransportSocket())) return;
+            buildWispUrl();
+            await performWispRequest();
+        }
+
+        function resetLab(clearLog = true) {
+            swReady = false;
+            adapterReady = false;
+            wispUrl = "";
+            builtFrames = [];
+            echoedFrames = 0;
+            identicalFrames = 0;
+
+            if (adapterPort) {
+                try { adapterPort.close(); } catch (_) {}
+                adapterPort = null;
+            }
+
+            document.getElementById("sw-status").textContent = "No comprobado";
+            document.getElementById("adapter-status").textContent = "No registrado";
+            document.getElementById("built-count").textContent = "0";
+            document.getElementById("echo-count").textContent = "0";
+            document.getElementById("identical-count").textContent = "0/0";
+            document.getElementById("result").textContent = "No probado";
+            document.getElementById("wisp-url").textContent = "—";
+            document.getElementById("browser-host").textContent = "—";
+            document.getElementById("response-box").textContent = "Sin respuesta.";
+            renderFrames();
+
+            if (clearLog) {
+                document.getElementById("log").textContent = "";
+                log("Fase 5D lista. El único endpoint externo permitido es Postman Echo.");
+            }
+        }
+
+        resetLab();
+    </script>
+</body>
+</html>
