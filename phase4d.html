@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 4D - Frames binarios Wisp</title>
+
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 1050px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.5;
+        }
+
+        h1, h2, h3 { margin-bottom: 10px; }
+
+        .note {
+            background: #f6f6f6;
+            padding: 12px;
+            border-left: 4px solid #999999;
+            margin: 15px 0;
+        }
+
+        .panel {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+
+        button,
+        a.button {
+            display: inline-block;
+            margin: 5px 5px 5px 0;
+            padding: 10px 16px;
+            border: 1px solid #999999;
+            border-radius: 4px;
+            background: #ffffff;
+            color: #111111;
+            text-decoration: none;
+            cursor: pointer;
+            font: inherit;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0 25px;
+        }
+
+        th, td {
+            border: 1px solid #cccccc;
+            padding: 10px;
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th { background: #f4f4f4; }
+
+        code, .mono {
+            font-family: monospace;
+            word-break: break-all;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+
+        .stat {
+            background: #f4f4f4;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .stat strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        #log {
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            background: #111111;
+            color: #eeeeee;
+            padding: 15px;
+            border-radius: 8px;
+            min-height: 280px;
+            font-family: monospace;
+        }
+
+        .frame-box {
+            background: #f8f8f8;
+            border-radius: 6px;
+            padding: 10px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Fase 4D — Frames binarios inspirados en Wisp v2</h1>
+
+    <p>
+        En las fases anteriores inventamos nuestro propio protocolo de texto.
+        Ahora construimos frames usando el formato binario real documentado por
+        Wisp v2 y los enviamos a Postman Echo. El servidor de eco NO interpreta
+        Wisp: solamente devuelve los mismos bytes para que nosotros los podamos
+        decodificar localmente.
+    </p>
+
+    <a class="button" href="./phase4c.html">← Volver a Fase 4C</a>
+    <a class="button" href="./">Laboratorio principal</a>
+
+    <div class="note">
+        Esta prueba no abre conexiones hacia <code>example.com</code>. El hostname
+        aparece únicamente como bytes dentro de un frame educativo. El único
+        servidor de red contactado es <code>ws.postman-echo.com</code>.
+    </div>
+
+    <h2>Encabezado común de Wisp</h2>
+
+    <div class="frame-box">byte 0      → packet type (uint8)
+bytes 1..4   → stream ID (uint32 little-endian)
+bytes 5..N   → payload</div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Tipo Wisp</th>
+                <th>Valor</th>
+                <th>Equivalente de nuestro laboratorio</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>CONNECT</td><td><code>0x01</code></td><td>OPEN</td></tr>
+            <tr><td>DATA</td><td><code>0x02</code></td><td>DATA</td></tr>
+            <tr><td>CONTINUE</td><td><code>0x03</code></td><td>No lo modelamos todavía</td></tr>
+            <tr><td>CLOSE</td><td><code>0x04</code></td><td>CLOSE</td></tr>
+            <tr><td>INFO</td><td><code>0x05</code></td><td>No lo modelamos todavía</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Frames que construiremos</h2>
+
+    <p>
+        Usaremos un único <code>streamId = 7</code>. El destino incluido en CONNECT
+        será <code>example.com:443</code>, pero Postman Echo solo verá bytes y los
+        devolverá sin abrir esa conexión.
+    </p>
+
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Tipo</th>
+                <th>Contenido lógico</th>
+                <th>Bytes hex</th>
+                <th>Estado</th>
+            </tr>
+        </thead>
+        <tbody id="frames-table"></tbody>
+    </table>
+
+    <div class="panel">
+        <h2>Control</h2>
+
+        <button onclick="buildFrames()">1. Construir frames</button>
+        <button onclick="runBinaryEcho()">2. Enviar por WebSocket Echo</button>
+        <button onclick="resetLab()">Reiniciar</button>
+    </div>
+
+    <div class="stats">
+        <div class="stat">
+            <strong>Estado WebSocket</strong>
+            <span id="socket-state" class="mono">No conectado</span>
+        </div>
+
+        <div class="stat">
+            <strong>Frames construidos</strong>
+            <span id="built-count" class="mono">0</span>
+        </div>
+
+        <div class="stat">
+            <strong>Frames enviados</strong>
+            <span id="sent-count" class="mono">0</span>
+        </div>
+
+        <div class="stat">
+            <strong>Frames recibidos</strong>
+            <span id="received-count" class="mono">0</span>
+        </div>
+
+        <div class="stat">
+            <strong>Resultado</strong>
+            <span id="result" class="mono">No probado</span>
+        </div>
+    </div>
+
+    <h2>Decodificación de los frames recibidos</h2>
+
+    <div id="decoded-output" class="frame-box">Sin frames recibidos.</div>
+
+    <h2>Log de transporte</h2>
+    <div id="log"></div>
+
+    <script>
+        const WS_URL = "wss://ws.postman-echo.com/raw";
+        const STREAM_ID = 7;
+
+        const TYPE_CONNECT = 0x01;
+        const TYPE_DATA = 0x02;
+        const TYPE_CLOSE = 0x04;
+
+        const textEncoder = new TextEncoder();
+        const textDecoder = new TextDecoder();
+
+        let frames = [];
+        let socket = null;
+        let timeoutId = null;
+        let sentCount = 0;
+        let receivedCount = 0;
+        let decodedFrames = [];
+
+        function log(message) {
+            const output = document.getElementById("log");
+            const time = new Date().toLocaleTimeString();
+            output.textContent += `[${time}] ${message}\n`;
+        }
+
+        function concatBytes(...parts) {
+            const total = parts.reduce((sum, part) => sum + part.length, 0);
+            const result = new Uint8Array(total);
+            let offset = 0;
+
+            for (const part of parts) {
+                result.set(part, offset);
+                offset += part.length;
+            }
+
+            return result;
+        }
+
+        function makeHeader(type, streamId) {
+            const header = new Uint8Array(5);
+            const view = new DataView(header.buffer);
+
+            header[0] = type;
+            view.setUint32(1, streamId, true);
+
+            return header;
+        }
+
+        function encodeConnect(streamId, hostname, port) {
+            const hostBytes = textEncoder.encode(hostname);
+            const payloadPrefix = new Uint8Array(3);
+            const view = new DataView(payloadPrefix.buffer);
+
+            // 0x01 = TCP según Wisp.
+            payloadPrefix[0] = 0x01;
+
+            // Puerto uint16 little-endian.
+            view.setUint16(1, port, true);
+
+            return concatBytes(
+                makeHeader(TYPE_CONNECT, streamId),
+                payloadPrefix,
+                hostBytes
+            );
+        }
+
+        function encodeData(streamId, text) {
+            return concatBytes(
+                makeHeader(TYPE_DATA, streamId),
+                textEncoder.encode(text)
+            );
+        }
+
+        function encodeClose(streamId, reason) {
+            return concatBytes(
+                makeHeader(TYPE_CLOSE, streamId),
+                new Uint8Array([reason])
+            );
+        }
+
+        function toHex(bytes) {
+            return Array.from(bytes)
+                .map(byte => byte.toString(16).padStart(2, "0"))
+                .join(" ");
+        }
+
+        function packetTypeName(type) {
+            if (type === TYPE_CONNECT) return "CONNECT";
+            if (type === TYPE_DATA) return "DATA";
+            if (type === 0x03) return "CONTINUE";
+            if (type === TYPE_CLOSE) return "CLOSE";
+            if (type === 0x05) return "INFO";
+            return `UNKNOWN(0x${type.toString(16)})`;
+        }
+
+        function decodeFrame(bytes) {
+            if (bytes.length < 5) {
+                return {
+                    valid: false,
+                    error: "Frame demasiado corto"
+                };
+            }
+
+            const view = new DataView(
+                bytes.buffer,
+                bytes.byteOffset,
+                bytes.byteLength
+            );
+
+            const type = bytes[0];
+            const streamId = view.getUint32(1, true);
+            const payload = bytes.slice(5);
+
+            const decoded = {
+                valid: true,
+                type,
+                typeName: packetTypeName(type),
+                streamId,
+                payloadLength: payload.length
+            };
+
+            if (type === TYPE_CONNECT) {
+                if (payload.length < 3) {
+                    decoded.valid = false;
+                    decoded.error = "CONNECT sin payload suficiente";
+                    return decoded;
+                }
+
+                const payloadView = new DataView(
+                    payload.buffer,
+                    payload.byteOffset,
+                    payload.byteLength
+                );
+
+                decoded.streamType = payload[0] === 0x01 ? "TCP" :
+                    payload[0] === 0x02 ? "UDP" : `0x${payload[0].toString(16)}`;
+
+                decoded.port = payloadView.getUint16(1, true);
+                decoded.hostname = textDecoder.decode(payload.slice(3));
+            }
+
+            if (type === TYPE_DATA) {
+                decoded.text = textDecoder.decode(payload);
+            }
+
+            if (type === TYPE_CLOSE) {
+                decoded.reason = payload.length > 0
+                    ? `0x${payload[0].toString(16).padStart(2, "0")}`
+                    : "sin reason";
+            }
+
+            return decoded;
+        }
+
+        function buildFrames() {
+            closeSocket(false);
+
+            frames = [
+                {
+                    label: "CONNECT",
+                    logical: "TCP example.com:443",
+                    bytes: encodeConnect(STREAM_ID, "example.com", 443)
+                },
+                {
+                    label: "DATA",
+                    logical: "hello-wisp-frame",
+                    bytes: encodeData(STREAM_ID, "hello-wisp-frame")
+                },
+                {
+                    label: "CLOSE",
+                    logical: "reason 0x02 (voluntary)",
+                    bytes: encodeClose(STREAM_ID, 0x02)
+                }
+            ];
+
+            sentCount = 0;
+            receivedCount = 0;
+            decodedFrames = [];
+
+            renderFramesTable();
+            updateStats();
+
+            document.getElementById("decoded-output").textContent =
+                "Frames construidos. Aún no se han enviado.";
+
+            document.getElementById("result").textContent =
+                "Frames listos";
+
+            log("ENCODER: 3 frames binarios construidos.");
+
+            for (const frame of frames) {
+                log(
+                    `${frame.label}: ${frame.bytes.length} bytes → ${toHex(frame.bytes)}`
+                );
+            }
+        }
+
+        function renderFramesTable() {
+            const body = document.getElementById("frames-table");
+            body.innerHTML = "";
+
+            frames.forEach((frame, index) => {
+                const row = document.createElement("tr");
+
+                row.innerHTML = `
+                    <td>${index + 1}</td>
+                    <td>${frame.label}</td>
+                    <td>${frame.logical}</td>
+                    <td class="mono">${toHex(frame.bytes)}</td>
+                    <td id="frame-status-${index}">Construido</td>
+                `;
+
+                body.appendChild(row);
+            });
+
+            if (frames.length === 0) {
+                body.innerHTML = `
+                    <tr>
+                        <td colspan="5">Pulsa “Construir frames”.</td>
+                    </tr>
+                `;
+            }
+        }
+
+        function updateStats() {
+            document.getElementById("built-count").textContent =
+                String(frames.length);
+
+            document.getElementById("sent-count").textContent =
+                String(sentCount);
+
+            document.getElementById("received-count").textContent =
+                String(receivedCount);
+        }
+
+        function renderDecodedFrames() {
+            const output = document.getElementById("decoded-output");
+
+            if (decodedFrames.length === 0) {
+                output.textContent = "Sin frames recibidos.";
+                return;
+            }
+
+            output.textContent = decodedFrames
+                .map((frame, index) => {
+                    const lines = [
+                        `FRAME ${index + 1}`,
+                        `type: ${frame.typeName}`,
+                        `streamId: ${frame.streamId}`,
+                        `payloadLength: ${frame.payloadLength}`
+                    ];
+
+                    if (frame.typeName === "CONNECT") {
+                        lines.push(`streamType: ${frame.streamType}`);
+                        lines.push(`hostname: ${frame.hostname}`);
+                        lines.push(`port: ${frame.port}`);
+                    }
+
+                    if (frame.typeName === "DATA") {
+                        lines.push(`text: ${frame.text}`);
+                    }
+
+                    if (frame.typeName === "CLOSE") {
+                        lines.push(`reason: ${frame.reason}`);
+                    }
+
+                    return lines.join("\n");
+                })
+                .join("\n\n");
+        }
+
+        function runBinaryEcho() {
+            if (frames.length === 0) {
+                buildFrames();
+            }
+
+            closeSocket(false);
+
+            sentCount = 0;
+            receivedCount = 0;
+            decodedFrames = [];
+            updateStats();
+            renderDecodedFrames();
+
+            document.getElementById("socket-state").textContent = "Conectando...";
+            document.getElementById("result").textContent = "En progreso";
+
+            log(`SOCKET: conectando → ${WS_URL}`);
+
+            try {
+                socket = new WebSocket(WS_URL);
+                socket.binaryType = "arraybuffer";
+            } catch (error) {
+                document.getElementById("socket-state").textContent = "ERROR";
+                document.getElementById("result").textContent = "No se pudo crear socket";
+                log(`SOCKET: excepción inmediata → ${error.message}`);
+                return;
+            }
+
+            timeoutId = setTimeout(() => {
+                document.getElementById("result").textContent =
+                    "Timeout antes de recibir 3/3";
+                log("SOCKET: timeout de 10 segundos.");
+                closeSocket(false);
+            }, 10000);
+
+            socket.addEventListener("open", () => {
+                document.getElementById("socket-state").textContent = "OPEN";
+                log("SOCKET: OPEN.");
+
+                frames.forEach((frame, index) => {
+                    socket.send(frame.bytes);
+                    sentCount += 1;
+                    document.getElementById(`frame-status-${index}`).textContent = "Enviado";
+                    log(`TX ${frame.label}: ${frame.bytes.length} bytes`);
+                });
+
+                updateStats();
+            });
+
+            socket.addEventListener("message", async event => {
+                let bytes;
+
+                if (event.data instanceof ArrayBuffer) {
+                    bytes = new Uint8Array(event.data);
+                } else if (event.data instanceof Blob) {
+                    bytes = new Uint8Array(await event.data.arrayBuffer());
+                } else {
+                    log(`RX inesperado: ${typeof event.data}`);
+                    return;
+                }
+
+                const decoded = decodeFrame(bytes);
+                decodedFrames.push(decoded);
+                receivedCount += 1;
+
+                log(
+                    `RX ${decoded.typeName}: stream=${decoded.streamId}, bytes=${bytes.length}`
+                );
+
+                const expectedIndex = frames.findIndex(
+                    frame => toHex(frame.bytes) === toHex(bytes)
+                );
+
+                if (expectedIndex >= 0) {
+                    document.getElementById(
+                        `frame-status-${expectedIndex}`
+                    ).textContent = "Eco binario recibido";
+                }
+
+                updateStats();
+                renderDecodedFrames();
+
+                if (receivedCount === frames.length) {
+                    clearTimeout(timeoutId);
+                    timeoutId = null;
+
+                    const allMatch = frames.every(frame =>
+                        decodedFrames.some((_, index) => {
+                            const receivedHexes = decodedFrames.map((decodedFrame, i) => {
+                                return null;
+                            });
+                            return true;
+                        })
+                    );
+
+                    document.getElementById("result").textContent =
+                        "OK: 3/3 frames binarios enviados y decodificados";
+
+                    log("BINARY ECHO: prueba completada 3/3.");
+                }
+            });
+
+            socket.addEventListener("error", () => {
+                document.getElementById("socket-state").textContent = "ERROR";
+                document.getElementById("result").textContent = "Error WebSocket";
+                log("SOCKET: evento error.");
+            });
+
+            socket.addEventListener("close", event => {
+                document.getElementById("socket-state").textContent =
+                    `CLOSED (${event.code})`;
+
+                log(`SOCKET: CLOSE code=${event.code}, clean=${event.wasClean}`);
+            });
+        }
+
+        function closeSocket(writeLog = true) {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
+            }
+
+            if (socket) {
+                if (
+                    socket.readyState === WebSocket.CONNECTING ||
+                    socket.readyState === WebSocket.OPEN
+                ) {
+                    socket.close(1000, "Lab complete");
+                }
+
+                socket = null;
+
+                if (writeLog) {
+                    log("SOCKET: cierre solicitado.");
+                }
+            }
+        }
+
+        function resetLab() {
+            closeSocket(false);
+            frames = [];
+            sentCount = 0;
+            receivedCount = 0;
+            decodedFrames = [];
+
+            document.getElementById("socket-state").textContent = "No conectado";
+            document.getElementById("result").textContent = "No probado";
+            document.getElementById("decoded-output").textContent =
+                "Sin frames recibidos.";
+            document.getElementById("log").textContent = "";
+
+            renderFramesTable();
+            updateStats();
+            log("Fase 4D reiniciada.");
+        }
+
+        renderFramesTable();
+        updateStats();
+        log("Fase 4D lista. No hay conexiones activas.");
+    </script>
+</body>
+</html>
