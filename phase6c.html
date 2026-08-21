@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 6C - Runtime Leak Audit</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1180px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(175px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    .covered { font-weight: 600; }
+    .leak { font-weight: 600; text-decoration: underline; }
+    #log { min-height: 280px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h1>Fase 6C — Runtime Leak Audit</h1>
+
+  <p>
+    Esta fase busca huecos de cobertura en un runtime virtual. Si una operación que puede
+    contener una URL no tiene handler, marcamos que la URL lógica <em>podría</em> llegar a
+    la API nativa. No ejecutamos la API: el “leak” es una predicción local del modelo.
+  </p>
+
+  <a class="button" href="./phase6b.html">← Volver a Fase 6B</a>
+  <a class="button" href="./phase6a.html">Revisar Fase 6A</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    No se llama <code>fetch()</code>, <code>window.open()</code>, <code>WebSocket</code>,
+    <code>sendBeacon()</code>, <code>EventSource</code> ni <code>XMLHttpRequest</code>.
+    Requests reales = 0 durante toda la prueba.
+  </div>
+
+  <div class="panel">
+    <h2>Control</h2>
+    <button onclick="runBaseline()">1. Auditar runtime incompleto</button>
+    <button onclick="applyPatchAndRun()">2. Aplicar parche defensivo y repetir</button>
+    <button onclick="resetLab()">Reiniciar</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Modo</strong><span id="mode" class="mono">Sin ejecutar</span></div>
+    <div class="stat"><strong>Operaciones auditadas</strong><span id="total" class="mono">0</span></div>
+    <div class="stat"><strong>Cubiertas</strong><span id="covered" class="mono">0</span></div>
+    <div class="stat"><strong>WOULD_LEAK</strong><span id="leaks" class="mono">0</span></div>
+    <div class="stat"><strong>APIs nativas invocadas</strong><span class="mono">0</span></div>
+    <div class="stat"><strong>Requests reales</strong><span class="mono">0</span></div>
+    <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+  </div>
+
+  <h2>Matriz de cobertura</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Superficie</th>
+        <th>Input de página</th>
+        <th>URL lógica resuelta</th>
+        <th>Handler</th>
+        <th>Qué recibiría el navegador</th>
+        <th>Diagnóstico</th>
+      </tr>
+    </thead>
+    <tbody id="audit-body">
+      <tr><td colspan="7">Ejecuta una auditoría.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Modelo</h2>
+  <pre class="mono">Con handler:
+page intent → runtime → rewrite same-origin → STOP
+
+Sin handler:
+page intent → runtime no reconoce operación → [API nativa recibiría URL lógica]
+                                           → STOP EN EL LAB
+
+Parche defensivo:
+añadir handler al runtime virtual → repetir audit → comprobar 0 huecos</pre>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const PAGE_URL = "https://demo.invalid/app/index.html";
+    const ROUTE_PREFIX = `${location.origin}/securly-lab/__runtime_audit__/`;
+
+    const OPERATIONS = [
+      { surface: "fetch", label: "fetch()", input: "/api/profile" },
+      { surface: "window.open", label: "window.open()", input: "/help" },
+      { surface: "WebSocket", label: "new WebSocket()", input: "/events", websocket: true },
+      { surface: "sendBeacon", label: "navigator.sendBeacon()", input: "/metrics" },
+      { surface: "EventSource", label: "new EventSource()", input: "/stream" },
+      { surface: "XMLHttpRequest", label: "XMLHttpRequest.open()", input: "/legacy-data" }
+    ];
+
+    const BASELINE_HANDLERS = new Set(["fetch", "window.open", "WebSocket"]);
+    const PATCHED_HANDLERS = new Set([
+      "fetch", "window.open", "WebSocket",
+      "sendBeacon", "EventSource", "XMLHttpRequest"
+    ]);
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById("log").textContent += `[${time}] ${message}\n`;
+    }
+
+    function textToBase64Url(text) {
+      const bytes = new TextEncoder().encode(text);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    }
+
+    function resolveLogicalUrl(operation) {
+      const url = new URL(operation.input, PAGE_URL);
+      if (operation.websocket) {
+        if (url.protocol === "https:") url.protocol = "wss:";
+        if (url.protocol === "http:") url.protocol = "ws:";
+      }
+      return url.href;
+    }
+
+    function makeRuntimeRoute(operation, logicalUrl) {
+      const kind = encodeURIComponent(operation.surface.toLowerCase());
+      return `${ROUTE_PREFIX}${kind}/${textToBase64Url(logicalUrl)}`;
+    }
+
+    function runAudit(handlers, modeLabel) {
+      const body = document.getElementById("audit-body");
+      body.innerHTML = "";
+
+      let covered = 0;
+      let leaks = 0;
+
+      OPERATIONS.forEach((operation, index) => {
+        const logicalUrl = resolveLogicalUrl(operation);
+        const hasHandler = handlers.has(operation.surface);
+        const browserWouldReceive = hasHandler
+          ? makeRuntimeRoute(operation, logicalUrl)
+          : logicalUrl;
+        const diagnosis = hasHandler ? "COVERED" : "WOULD_LEAK";
+
+        if (hasHandler) covered += 1;
+        else leaks += 1;
+
+        const row = document.createElement("tr");
+        const values = [
+          String(index + 1),
+          operation.label,
+          operation.input,
+          logicalUrl,
+          hasHandler ? "SÍ" : "NO",
+          browserWouldReceive,
+          diagnosis
+        ];
+
+        values.forEach((value, cellIndex) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          if (cellIndex >= 1) cell.classList.add("mono");
+          if (cellIndex === 6) cell.classList.add(hasHandler ? "covered" : "leak");
+          row.appendChild(cell);
+        });
+
+        body.appendChild(row);
+        log(`${diagnosis}: ${operation.label} → ${logicalUrl}`);
+        if (!hasHandler) {
+          log(`  GAP: sin instrumentación, la API nativa recibiría ${logicalUrl}`);
+          log("  STOP: el laboratorio NO invoca esa API.");
+        }
+      });
+
+      document.getElementById("mode").textContent = modeLabel;
+      document.getElementById("total").textContent = String(OPERATIONS.length);
+      document.getElementById("covered").textContent = String(covered);
+      document.getElementById("leaks").textContent = String(leaks);
+
+      if (leaks === 0) {
+        document.getElementById("result").textContent = "OK: 0 huecos en esta matriz";
+        log("RESULT: todas las superficies de esta matriz tienen handler virtual.");
+      } else {
+        document.getElementById("result").textContent = `${leaks} huecos detectados`;
+        log(`RESULT: ${leaks} superficies quedarían fuera del runtime.`);
+      }
+    }
+
+    function runBaseline() {
+      document.getElementById("log").textContent = "";
+      log("AUDIT: runtime 6B reducido a tres handlers para demostrar fugas.");
+      runAudit(BASELINE_HANDLERS, "Baseline incompleto");
+    }
+
+    function applyPatchAndRun() {
+      document.getElementById("log").textContent = "";
+      log("PATCH: añadidos handlers virtuales para sendBeacon, EventSource y XMLHttpRequest.");
+      log("PATCH: no se modifica ninguna API real del navegador.");
+      runAudit(PATCHED_HANDLERS, "Parche defensivo simulado");
+    }
+
+    function resetLab() {
+      document.getElementById("mode").textContent = "Sin ejecutar";
+      document.getElementById("total").textContent = "0";
+      document.getElementById("covered").textContent = "0";
+      document.getElementById("leaks").textContent = "0";
+      document.getElementById("result").textContent = "No probado";
+      document.getElementById("audit-body").innerHTML = '<tr><td colspan="7">Ejecuta una auditoría.</td></tr>';
+      document.getElementById("log").textContent = "";
+      log("Fase 6C lista. Network = 0; native APIs invoked = 0.");
+    }
+
+    resetLab();
+  </script>
+</body>
+</html>
