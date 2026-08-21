@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 5C - Service Worker y Transport Adapter</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+        h1, h2, h3 { margin-bottom: 10px; }
+        .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+        .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+        button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+        .stats, .chain { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 15px 0; }
+        .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+        .stat strong { display: block; margin-bottom: 5px; }
+        .chain-step { border: 1px solid #ccc; border-radius: 8px; padding: 12px; }
+        .mono, code { font-family: monospace; word-break: break-all; }
+        .box { background: #f7f7f7; border-radius: 8px; padding: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+        table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+        th, td { border: 1px solid #ccc; padding: 10px; text-align: left; vertical-align: top; }
+        th { background: #f4f4f4; }
+        #log { min-height: 330px; background: #111; color: #eee; padding: 15px; border-radius: 8px; font-family: monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    </style>
+</head>
+<body>
+    <h1>Fase 5C — Service Worker ↔ Transport Adapter</h1>
+
+    <p>
+        Esta fase conecta el routing de 5B con una capa de transporte controlada.
+        Chrome pide una ruta del mismo origen, el Service Worker recupera la URL lógica
+        y la delega a esta página mediante <code>MessageChannel</code>. La página usa un
+        único WebSocket de eco y devuelve el resultado al Service Worker.
+    </p>
+
+    <a class="button" href="./phase5b.html">← Volver a Fase 5B</a>
+    <a class="button" href="./">Laboratorio principal</a>
+
+    <div class="note">
+        Esto NO es un proxy ni un túnel. El destino lógico está fijado a
+        <code>https://demo.invalid/img/logo.png</code>. Postman Echo recibe únicamente
+        un mensaje de laboratorio y lo devuelve; ni Postman ni el Service Worker
+        abren una conexión hacia <code>demo.invalid</code>.
+    </div>
+
+    <h2>Cadena real de la prueba</h2>
+    <div class="chain">
+        <div class="chain-step"><strong>1. Rewriter</strong><div class="mono">/__lab_transport__/...</div></div>
+        <div class="chain-step"><strong>2. Chrome</strong><div class="mono">fetch() al mismo origen</div></div>
+        <div class="chain-step"><strong>3. Service Worker</strong><div class="mono">decode + MessageChannel</div></div>
+        <div class="chain-step"><strong>4. Adapter</strong><div class="mono">WebSocket → Postman Echo</div></div>
+        <div class="chain-step"><strong>5. Regreso</strong><div class="mono">Echo → adapter → SW → fetch()</div></div>
+    </div>
+
+    <div class="panel">
+        <h2>Control</h2>
+        <button onclick="prepareServiceWorker()">1. Preparar SW 5C</button>
+        <button onclick="registerTransportAdapter()">2. Registrar adapter</button>
+        <button onclick="openTransportSocket()">3. Abrir WebSocket</button>
+        <button onclick="buildTransportUrl()">4. Construir ruta</button>
+        <button onclick="performFullRequest()">5. Hacer request completo</button>
+        <button onclick="runFullTest()">Ejecutar todo</button>
+        <button onclick="resetLab()">Reiniciar</button>
+    </div>
+
+    <div class="stats">
+        <div class="stat"><strong>Service Worker</strong><span id="sw-status" class="mono">No comprobado</span></div>
+        <div class="stat"><strong>Transport adapter</strong><span id="adapter-status" class="mono">No registrado</span></div>
+        <div class="stat"><strong>WebSocket</strong><span id="ws-status" class="mono">CLOSED</span></div>
+        <div class="stat"><strong>Requests SW→adapter</strong><span id="adapter-requests" class="mono">0</span></div>
+        <div class="stat"><strong>Ecos WebSocket</strong><span id="echo-count" class="mono">0</span></div>
+        <div class="stat"><strong>Destino lógico contactado</strong><span id="logical-contact" class="mono">NO</span></div>
+        <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+    </div>
+
+    <h2>Datos de la solicitud</h2>
+    <table>
+        <tbody>
+            <tr><th>URL lógica fija</th><td id="logical-url" class="mono">https://demo.invalid/img/logo.png</td></tr>
+            <tr><th>URL visible a Chrome</th><td id="transport-url" class="mono">—</td></tr>
+            <tr><th>Host visible a Chrome</th><td id="browser-host" class="mono">—</td></tr>
+            <tr><th>Endpoint real de transporte</th><td class="mono">wss://ws.postman-echo.com/raw</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Mensaje que cruza el adapter</h2>
+    <div id="envelope-box" class="box">Sin mensaje.</div>
+
+    <h2>Respuesta final del Service Worker</h2>
+    <div id="response-box" class="box">Sin respuesta.</div>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+
+    <script>
+        const LOGICAL_URL = "https://demo.invalid/img/logo.png";
+        const WS_URL = "wss://ws.postman-echo.com/raw";
+        const TRANSPORT_PREFIX = `${location.origin}/securly-lab/__lab_transport__/`;
+
+        let swReady = false;
+        let adapterReady = false;
+        let transportUrl = "";
+        let channel = null;
+        let adapterPort = null;
+        let socket = null;
+        let socketOpenPromise = null;
+        let adapterRequestCount = 0;
+        let echoCount = 0;
+        const wsPending = new Map();
+
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            document.getElementById("log").textContent += `[${time}] ${message}\n`;
+        }
+
+        function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        function updateCounters() {
+            document.getElementById("adapter-requests").textContent = String(adapterRequestCount);
+            document.getElementById("echo-count").textContent = String(echoCount);
+        }
+
+        function bytesToBase64Url(text) {
+            const bytes = new TextEncoder().encode(text);
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+        }
+
+        async function probeWorker() {
+            try {
+                const response = await fetch(`./lab-message?phase=5c&t=${Date.now()}`, { cache: "no-store" });
+                if (!response.ok) return null;
+                const data = await response.json();
+                if (
+                    data.source === "service-worker" &&
+                    Array.isArray(data.swFeatures) &&
+                    data.swFeatures.includes("5C")
+                ) return data;
+                return null;
+            } catch (_) {
+                return null;
+            }
+        }
+
+        async function prepareServiceWorker() {
+            if (!("serviceWorker" in navigator)) {
+                document.getElementById("sw-status").textContent = "No soportado";
+                document.getElementById("result").textContent = "Falló";
+                return false;
+            }
+
+            document.getElementById("sw-status").textContent = "Actualizando...";
+            log("SW: registrando ./sw.js con updateViaCache=none.");
+
+            try {
+                const registration = await navigator.serviceWorker.register("./sw.js", { updateViaCache: "none" });
+                await registration.update();
+                await navigator.serviceWorker.ready;
+
+                for (let attempt = 1; attempt <= 35; attempt++) {
+                    const info = await probeWorker();
+                    if (info && navigator.serviceWorker.controller) {
+                        swReady = true;
+                        document.getElementById("sw-status").textContent = `Activo — ${info.swVersion}`;
+                        log(`SW: capacidad 5C confirmada en intento ${attempt}.`);
+                        return true;
+                    }
+                    await sleep(200);
+                }
+
+                document.getElementById("sw-status").textContent = "5C no confirmado";
+                log("SW: no se confirmó controller + capacidad 5C.");
+                return false;
+            } catch (error) {
+                document.getElementById("sw-status").textContent = "ERROR";
+                log(`SW: ${error.message}`);
+                return false;
+            }
+        }
+
+        async function registerTransportAdapter() {
+            if (!swReady) {
+                const ready = await prepareServiceWorker();
+                if (!ready) return false;
+            }
+
+            if (!navigator.serviceWorker.controller) {
+                log("ADAPTER: no hay ServiceWorker controller.");
+                return false;
+            }
+
+            if (adapterPort) {
+                try { adapterPort.close(); } catch (_) {}
+            }
+
+            channel = new MessageChannel();
+            adapterPort = channel.port1;
+
+            return new Promise((resolve) => {
+                const timeoutId = setTimeout(() => {
+                    document.getElementById("adapter-status").textContent = "Timeout";
+                    log("ADAPTER: timeout esperando ACK del SW.");
+                    resolve(false);
+                }, 4000);
+
+                adapterPort.onmessage = async (event) => {
+                    const message = event.data;
+
+                    if (message?.type === "5c-transport-registered") {
+                        clearTimeout(timeoutId);
+                        adapterReady = true;
+                        document.getElementById("adapter-status").textContent = "Registrado";
+                        log(`ADAPTER: registrado en SW ${message.swVersion}.`);
+                        resolve(true);
+                        return;
+                    }
+
+                    if (message?.type === "5c-transport-request") {
+                        await handleTransportRequest(message);
+                    }
+                };
+
+                adapterPort.start();
+
+                navigator.serviceWorker.controller.postMessage(
+                    { type: "register-5c-transport" },
+                    [channel.port2]
+                );
+
+                document.getElementById("adapter-status").textContent = "Registrando...";
+                log("ADAPTER: MessagePort enviado al Service Worker.");
+            });
+        }
+
+        async function openTransportSocket() {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                document.getElementById("ws-status").textContent = "OPEN";
+                return true;
+            }
+
+            if (socketOpenPromise) return socketOpenPromise;
+
+            document.getElementById("ws-status").textContent = "CONNECTING";
+            log(`WS: conectando solo a ${WS_URL}`);
+
+            socketOpenPromise = new Promise((resolve) => {
+                let settled = false;
+                const timeoutId = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    socketOpenPromise = null;
+                    document.getElementById("ws-status").textContent = "TIMEOUT";
+                    resolve(false);
+                }, 8000);
+
+                try {
+                    socket = new WebSocket(WS_URL);
+                } catch (error) {
+                    clearTimeout(timeoutId);
+                    settled = true;
+                    socketOpenPromise = null;
+                    document.getElementById("ws-status").textContent = "ERROR";
+                    log(`WS: ${error.message}`);
+                    resolve(false);
+                    return;
+                }
+
+                socket.addEventListener("open", () => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeoutId);
+                    socketOpenPromise = null;
+                    document.getElementById("ws-status").textContent = "OPEN";
+                    log("WS: OPEN.");
+                    resolve(true);
+                });
+
+                socket.addEventListener("message", (event) => {
+                    let envelope;
+                    try {
+                        envelope = JSON.parse(String(event.data));
+                    } catch (_) {
+                        log("WS: eco no JSON ignorado.");
+                        return;
+                    }
+
+                    if (envelope?.lab !== "5C" || !wsPending.has(envelope.id)) return;
+                    const pending = wsPending.get(envelope.id);
+                    wsPending.delete(envelope.id);
+                    clearTimeout(pending.timeoutId);
+                    echoCount += 1;
+                    updateCounters();
+                    pending.resolve(envelope);
+                });
+
+                socket.addEventListener("close", (event) => {
+                    document.getElementById("ws-status").textContent = `CLOSED (${event.code})`;
+                    log(`WS: CLOSE code=${event.code}, clean=${event.wasClean}`);
+                });
+
+                socket.addEventListener("error", () => {
+                    document.getElementById("ws-status").textContent = "ERROR";
+                    log("WS: evento error.");
+                });
+            });
+
+            return socketOpenPromise;
+        }
+
+        function sendEnvelopeAndWait(envelope) {
+            return new Promise((resolve, reject) => {
+                const timeoutId = setTimeout(() => {
+                    wsPending.delete(envelope.id);
+                    reject(new Error("Timeout esperando eco del transport endpoint."));
+                }, 7000);
+
+                wsPending.set(envelope.id, { resolve, reject, timeoutId });
+                socket.send(JSON.stringify(envelope));
+            });
+        }
+
+        async function handleTransportRequest(message) {
+            adapterRequestCount += 1;
+            updateCounters();
+            log(`ADAPTER RX: id=${message.id} ${message.method} ${message.logicalUrl}`);
+
+            if (message.logicalUrl !== LOGICAL_URL || message.method !== "GET") {
+                adapterPort.postMessage({
+                    type: "5c-transport-response",
+                    id: message.id,
+                    ok: false,
+                    error: "Solicitud fuera del escenario fijo 5C."
+                });
+                return;
+            }
+
+            const opened = await openTransportSocket();
+            if (!opened) {
+                adapterPort.postMessage({
+                    type: "5c-transport-response",
+                    id: message.id,
+                    ok: false,
+                    error: "No se pudo abrir el WebSocket Echo."
+                });
+                return;
+            }
+
+            const envelope = {
+                lab: "5C",
+                id: message.id,
+                method: message.method,
+                logicalUrl: message.logicalUrl,
+                operation: "metadata-echo-only"
+            };
+
+            document.getElementById("envelope-box").textContent = JSON.stringify(envelope, null, 2);
+            log(`ADAPTER TX WS: ${JSON.stringify(envelope)}`);
+
+            try {
+                const echoed = await sendEnvelopeAndWait(envelope);
+                const echoVerified =
+                    echoed.lab === envelope.lab &&
+                    echoed.id === envelope.id &&
+                    echoed.method === envelope.method &&
+                    echoed.logicalUrl === envelope.logicalUrl &&
+                    echoed.operation === envelope.operation;
+
+                log(`ADAPTER RX WS: echo id=${echoed.id}; verified=${echoVerified}`);
+
+                adapterPort.postMessage({
+                    type: "5c-transport-response",
+                    id: message.id,
+                    ok: echoVerified,
+                    endpoint: "ws.postman-echo.com",
+                    echoVerified,
+                    remoteDestinationContacted: false
+                });
+            } catch (error) {
+                adapterPort.postMessage({
+                    type: "5c-transport-response",
+                    id: message.id,
+                    ok: false,
+                    error: error.message
+                });
+            }
+        }
+
+        function buildTransportUrl() {
+            transportUrl = TRANSPORT_PREFIX + bytesToBase64Url(LOGICAL_URL);
+            const parsed = new URL(transportUrl);
+            document.getElementById("transport-url").textContent = transportUrl;
+            document.getElementById("browser-host").textContent = parsed.host;
+            log(`REWRITE: ${LOGICAL_URL}`);
+            log(`BROWSER URL: ${transportUrl}`);
+            return transportUrl;
+        }
+
+        async function performFullRequest() {
+            if (!swReady) {
+                const ready = await prepareServiceWorker();
+                if (!ready) return false;
+            }
+            if (!adapterReady) {
+                const ready = await registerTransportAdapter();
+                if (!ready) return false;
+            }
+            if (!transportUrl) buildTransportUrl();
+
+            document.getElementById("result").textContent = "Request en curso";
+            log("PAGE: fetch REAL a la ruta 5C del mismo origen.");
+
+            try {
+                const response = await fetch(transportUrl, { cache: "no-store" });
+                const data = await response.json();
+                document.getElementById("response-box").textContent = JSON.stringify(data, null, 2);
+
+                const checks = {
+                    httpOk: response.ok,
+                    fromServiceWorker: data.source === "service-worker",
+                    supports5C: Array.isArray(data.swFeatures) && data.swFeatures.includes("5C"),
+                    intercepted: data.intercepted === true,
+                    logicalUrlRecovered: data.logicalUrl === LOGICAL_URL,
+                    transported: data.transported === true,
+                    adapterCorrect: data.transport?.adapter === "page-message-channel",
+                    endpointCorrect: data.transport?.endpoint === "ws.postman-echo.com",
+                    echoVerified: data.transport?.websocketEchoVerified === true,
+                    logicalDestinationUntouched: data.remoteDestinationContacted === false,
+                    synthetic: data.syntheticResponse === true
+                };
+
+                const passed = Object.values(checks).every(Boolean);
+                log(`PAGE: HTTP ${response.status}.`);
+                log(`VERIFY: ${JSON.stringify(checks)}`);
+
+                if (passed) {
+                    document.getElementById("result").textContent = "OK: rewrite → SW → adapter → WS → SW";
+                    document.getElementById("logical-contact").textContent = "NO";
+                    log("RESULT: cadena 5C validada.");
+                } else {
+                    document.getElementById("result").textContent = "Alguna verificación falló";
+                }
+
+                return passed;
+            } catch (error) {
+                document.getElementById("result").textContent = "Request falló";
+                log(`PAGE: ${error.message}`);
+                return false;
+            }
+        }
+
+        async function runFullTest() {
+            resetLab(false);
+            log("FULL TEST: iniciando 5C.");
+
+            if (!await prepareServiceWorker()) return;
+            if (!await registerTransportAdapter()) return;
+            if (!await openTransportSocket()) return;
+            buildTransportUrl();
+            await performFullRequest();
+        }
+
+        function resetLab(clearLog = true) {
+            swReady = false;
+            adapterReady = false;
+            transportUrl = "";
+            adapterRequestCount = 0;
+            echoCount = 0;
+            updateCounters();
+
+            if (adapterPort) {
+                try { adapterPort.close(); } catch (_) {}
+                adapterPort = null;
+            }
+
+            if (socket) {
+                try { socket.close(1000, "Lab reset"); } catch (_) {}
+                socket = null;
+            }
+
+            socketOpenPromise = null;
+            wsPending.clear();
+
+            document.getElementById("sw-status").textContent = "No comprobado";
+            document.getElementById("adapter-status").textContent = "No registrado";
+            document.getElementById("ws-status").textContent = "CLOSED";
+            document.getElementById("logical-contact").textContent = "NO";
+            document.getElementById("result").textContent = "No probado";
+            document.getElementById("transport-url").textContent = "—";
+            document.getElementById("browser-host").textContent = "—";
+            document.getElementById("envelope-box").textContent = "Sin mensaje.";
+            document.getElementById("response-box").textContent = "Sin respuesta.";
+
+            if (clearLog) {
+                document.getElementById("log").textContent = "";
+                log("Fase 5C lista.");
+            }
+        }
+
+        resetLab();
+    </script>
+</body>
+</html>
