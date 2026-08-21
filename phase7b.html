@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fase 7B - Compatibility report con Wikipedia</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 1200px; margin: 40px auto; padding: 0 20px; line-height: 1.5; }
+    h1, h2, h3 { margin-bottom: 10px; }
+    .note { background: #f6f6f6; padding: 12px; border-left: 4px solid #999; margin: 15px 0; }
+    .panel { border: 1px solid #ccc; border-radius: 8px; padding: 15px; margin: 15px 0; }
+    button, a.button { display: inline-block; margin: 5px 5px 5px 0; padding: 10px 16px; border: 1px solid #999; border-radius: 4px; background: #fff; color: #111; text-decoration: none; cursor: pointer; font: inherit; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(185px, 1fr)); gap: 10px; margin: 15px 0; }
+    .stat { background: #f4f4f4; border-radius: 8px; padding: 12px; }
+    .stat strong { display: block; margin-bottom: 5px; }
+    .mono, code { font-family: monospace; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 15px 0 25px; }
+    th, td { border: 1px solid #ccc; padding: 9px; text-align: left; vertical-align: top; }
+    th { background: #f4f4f4; }
+    iframe { width: 100%; height: 330px; border: 1px solid #bbb; border-radius: 8px; background: white; }
+    #logo-preview { max-width: 180px; min-height: 80px; display: block; margin-top: 10px; }
+    textarea { width: 100%; min-height: 210px; box-sizing: border-box; font-family: monospace; }
+    #log { min-height: 360px; background: #111; color: #eee; padding: 15px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+    .pass { font-weight: 700; }
+    .fail { font-weight: 700; text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <h1>Fase 7B — Compatibility report con Wikipedia</h1>
+
+  <p>
+    Esta fase usa un destino real fijo y más complejo: <code>https://www.wikipedia.org/</code>.
+    No intenta proxificarlo. Separamos documento, imagen, stylesheet, CSSOM, fetch y rewriting
+    para ver qué capacidades funcionan directamente en el navegador y cuáles requerirían una
+    capa de virtualización adicional.
+  </p>
+
+  <a class="button" href="./phase7a.html">← Volver a Fase 7A</a>
+  <a class="button" href="https://www.wikipedia.org/" target="_blank" rel="noopener noreferrer">Abrir Wikipedia directamente</a>
+  <a class="button" href="./">Laboratorio principal</a>
+
+  <div class="note">
+    No hay selector de destino, relay, Wisp ni fetch hacia sitios bloqueados. Los únicos requests
+    externos de esta fase son a recursos fijos de <code>wikipedia.org</code> cuando ejecutas las pruebas.
+  </div>
+
+  <div class="panel">
+    <h2>Control</h2>
+    <button onclick="testDocument()">1. Documento real</button>
+    <button onclick="testImage()">2. Imagen real</button>
+    <button onclick="testStylesheet()">3. CSS real</button>
+    <button onclick="testCssomRead()">4. Leer CSSOM</button>
+    <button onclick="testFetch()">5. fetch real</button>
+    <button onclick="rewriteFixture()">6. Rewriter local</button>
+    <button onclick="runAll()">Ejecutar todo</button>
+    <button onclick="resetLab()">Reiniciar</button>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><strong>Documento</strong><span id="doc-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Imagen</strong><span id="img-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Stylesheet</strong><span id="css-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>CSSOM legible</strong><span id="cssom-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>fetch legible</strong><span id="fetch-status" class="mono">No probado</span></div>
+    <div class="stat"><strong>Mappings rewriter</strong><span id="mapping-count" class="mono">0</span></div>
+    <div class="stat"><strong>Requests externos iniciados</strong><span id="request-count" class="mono">0</span></div>
+    <div class="stat"><strong>Resultado</strong><span id="result" class="mono">No probado</span></div>
+  </div>
+
+  <h2>Página real</h2>
+  <iframe id="wiki-frame" title="Wikipedia real"></iframe>
+
+  <h2>Recurso de imagen real</h2>
+  <div class="panel">
+    <div class="mono">https://www.wikipedia.org/portal/wikipedia.org/assets/img/Wikipedia-logo-v2.png</div>
+    <img id="logo-preview" alt="Wikipedia logo probe">
+  </div>
+
+  <h2>Compatibility report</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Capacidad</th>
+        <th>Prueba</th>
+        <th>Estado</th>
+        <th>Interpretación</th>
+      </tr>
+    </thead>
+    <tbody id="report-body"></tbody>
+  </table>
+
+  <h2>Fixture compleja local</h2>
+  <p>
+    La fixture usa URLs reales/fijas de Wikipedia, pero no ejecuta el HTML transformado.
+    Sirve para medir cobertura del rewriter sobre varios tipos de atributo y CSS.
+  </p>
+
+  <h3>Antes</h3>
+  <textarea id="fixture-before" readonly></textarea>
+
+  <h3>Después</h3>
+  <textarea id="fixture-after" readonly>Sin reescribir.</textarea>
+
+  <h2>Mappings</h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Tipo</th><th>URL lógica</th><th>Ruta same-origin</th></tr>
+    </thead>
+    <tbody id="mapping-body"><tr><td colspan="4">Sin mappings.</td></tr></tbody>
+  </table>
+
+  <h2>Log</h2>
+  <div id="log"></div>
+
+  <script>
+    const PAGE_URL = "https://www.wikipedia.org/";
+    const IMAGE_URL = "https://www.wikipedia.org/portal/wikipedia.org/assets/img/Wikipedia-logo-v2.png";
+    const CSS_URL = "https://www.wikipedia.org/portal/wikipedia.org/assets/css/index.css";
+    const ES_URL = "https://es.wikipedia.org/";
+    const SEARCH_URL = "https://www.wikipedia.org/search-redirect.php";
+    const REWRITE_PREFIX = `${location.origin}/securly-lab/__compat_fixture__/`;
+
+    const FIXTURE_HTML = `<!doctype html>
+<html>
+<head>
+  <link rel="stylesheet" href="${CSS_URL}">
+  <style>.hero { background-image: url('${IMAGE_URL}'); }</style>
+</head>
+<body>
+  <a href="${ES_URL}">Español</a>
+  <img src="${IMAGE_URL}" srcset="${IMAGE_URL} 1x, ${IMAGE_URL} 2x" alt="Wikipedia">
+  <form action="${SEARCH_URL}" method="get"><input name="search"></form>
+  <div style="background-image:url('${IMAGE_URL}')">Hero</div>
+</body>
+</html>`;
+
+    let externalRequests = 0;
+    let mappings = [];
+    let stylesheetLink = null;
+    let statuses = {
+      document: "PENDING",
+      dom: "PENDING",
+      image: "PENDING",
+      css: "PENDING",
+      cssom: "PENDING",
+      fetch: "PENDING",
+      hrefsrc: "PENDING",
+      cssrewrite: "PENDING",
+      action: "PENDING",
+      runtime: "N/A"
+    };
+
+    function log(message) {
+      const time = new Date().toLocaleTimeString();
+      document.getElementById("log").textContent += `[${time}] ${message}\n`;
+    }
+
+    function setRequestCount() {
+      document.getElementById("request-count").textContent = String(externalRequests);
+    }
+
+    function encodeBase64Url(text) {
+      const bytes = new TextEncoder().encode(text);
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    }
+
+    function rewrittenRoute(absolute, kind) {
+      const route = `${REWRITE_PREFIX}${kind}/${encodeBase64Url(absolute)}`;
+      mappings.push({ kind, absolute, route });
+      return route;
+    }
+
+    function updateReport() {
+      const rows = [
+        ["Documento real", "iframe → wikipedia.org", statuses.document, "¿El navegador puede navegar al documento real?"],
+        ["DOM cross-origin", "frame.contentWindow.document", statuses.dom, "SOP debería impedir que el origen del laboratorio inspeccione el DOM."],
+        ["Imagen", "<img src=Wikipedia-logo>", statuses.image, "Carga de un subrecurso de imagen cross-origin."],
+        ["Stylesheet", "<link rel=stylesheet>", statuses.css, "El navegador puede aplicar CSS cross-origin aunque eso no implique poder leer sus reglas."],
+        ["CSSOM", "link.sheet.cssRules", statuses.cssom, "Normalmente queda protegido por Same-Origin Policy si la hoja es cross-origin."],
+        ["fetch", "fetch(wikipedia.org)", statuses.fetch, "Lectura JS depende de CORS; es independiente de navegación/subresource loading."],
+        ["href/src/srcset", "fixture local", statuses.hrefsrc, "Cobertura del rewriter para atributos HTML."],
+        ["CSS url()", "<style> + style=", statuses.cssrewrite, "Cobertura del rewriter dentro de CSS."],
+        ["form action", "fixture local", statuses.action, "Cobertura de navegación originada por formularios."],
+        ["Runtime JS dinámico", "no ejecutado en 7B", statuses.runtime, "Se deja para una fase posterior; 7B no ejecuta scripts remotos."]
+      ];
+
+      const body = document.getElementById("report-body");
+      body.innerHTML = "";
+      for (const rowData of rows) {
+        const row = document.createElement("tr");
+        rowData.forEach((value, index) => {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          if (index === 2) cell.className = value === "PASS" ? "pass mono" : value === "FAIL" ? "fail mono" : "mono";
+          row.appendChild(cell);
+        });
+        body.appendChild(row);
+      }
+    }
+
+    async function testDocument() {
+      const frame = document.getElementById("wiki-frame");
+      document.getElementById("doc-status").textContent = "Cargando...";
+      externalRequests += 1;
+      setRequestCount();
+      log(`DOC: navegación real → ${PAGE_URL}`);
+
+      const loaded = await new Promise((resolve) => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          resolve(false);
+        }, 12000);
+
+        frame.onload = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
+          resolve(true);
+        };
+        frame.src = PAGE_URL;
+      });
+
+      statuses.document = loaded ? "PASS" : "FAIL";
+      document.getElementById("doc-status").textContent = loaded ? "PASS — load" : "FAIL / timeout";
+
+      try {
+        const title = frame.contentWindow.document.title;
+        statuses.dom = "FAIL";
+        log(`DOC: DOM cross-origin fue legible inesperadamente; title=${JSON.stringify(title)}.`);
+      } catch (error) {
+        statuses.dom = "PASS";
+        log(`DOC: SOP bloqueó lectura del DOM → ${error.name}.`);
+      }
+
+      updateReport();
+      return loaded;
+    }
+
+    async function testImage() {
+      externalRequests += 1;
+      setRequestCount();
+      document.getElementById("img-status").textContent = "Cargando...";
+      log(`IMG: request real → ${IMAGE_URL}`);
+
+      const img = document.getElementById("logo-preview");
+      const ok = await new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(false), 10000);
+        img.onload = () => { clearTimeout(timeout); resolve(true); };
+        img.onerror = () => { clearTimeout(timeout); resolve(false); };
+        img.src = `${IMAGE_URL}?lab7b=${Date.now()}`;
+      });
+
+      statuses.image = ok ? "PASS" : "FAIL";
+      document.getElementById("img-status").textContent = ok ? "PASS" : "FAIL";
+      log(`IMG: ${ok ? "load recibido" : "error/timeout"}.`);
+      updateReport();
+      return ok;
+    }
+
+    async function testStylesheet() {
+      if (stylesheetLink) stylesheetLink.remove();
+
+      externalRequests += 1;
+      setRequestCount();
+      document.getElementById("css-status").textContent = "Cargando...";
+      log(`CSS: request real → ${CSS_URL}`);
+
+      stylesheetLink = document.createElement("link");
+      stylesheetLink.rel = "stylesheet";
+      stylesheetLink.href = `${CSS_URL}?lab7b=${Date.now()}`;
+      stylesheetLink.dataset.lab7b = "true";
+
+      const ok = await new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(false), 10000);
+        stylesheetLink.onload = () => { clearTimeout(timeout); resolve(true); };
+        stylesheetLink.onerror = () => { clearTimeout(timeout); resolve(false); };
+        document.head.appendChild(stylesheetLink);
+      });
+
+      statuses.css = ok ? "PASS" : "FAIL";
+      document.getElementById("css-status").textContent = ok ? "PASS — load" : "FAIL";
+      log(`CSS: ${ok ? "load recibido" : "error/timeout"}.`);
+      updateReport();
+      return ok;
+    }
+
+    async function testCssomRead() {
+      if (!stylesheetLink || statuses.css === "PENDING") await testStylesheet();
+
+      try {
+        const count = stylesheetLink.sheet?.cssRules?.length ?? 0;
+        statuses.cssom = "FAIL";
+        document.getElementById("cssom-status").textContent = `Legible (${count} reglas)`;
+        log(`CSSOM: lectura permitida; reglas=${count}.`);
+      } catch (error) {
+        statuses.cssom = "PASS";
+        document.getElementById("cssom-status").textContent = "Bloqueado por SOP";
+        log(`CSSOM: lectura bloqueada → ${error.name}.`);
+      }
+
+      updateReport();
+      return statuses.cssom === "PASS";
+    }
+
+    async function testFetch() {
+      externalRequests += 1;
+      setRequestCount();
+      document.getElementById("fetch-status").textContent = "En curso...";
+      log(`FETCH: request real → ${PAGE_URL}`);
+
+      try {
+        const response = await fetch(PAGE_URL, {
+          method: "GET",
+          mode: "cors",
+          credentials: "omit",
+          cache: "no-store"
+        });
+        const text = await response.text();
+        statuses.fetch = "PASS";
+        document.getElementById("fetch-status").textContent = `PASS — HTTP ${response.status}`;
+        log(`FETCH: respuesta legible; chars=${text.length}.`);
+      } catch (error) {
+        statuses.fetch = "FAIL";
+        document.getElementById("fetch-status").textContent = "FAIL — no legible";
+        log(`FETCH: bloqueado/no legible → ${error.name}: ${error.message}`);
+      }
+
+      updateReport();
+      return statuses.fetch === "PASS";
+    }
+
+    function rewriteCssUrls(cssText, base, kind) {
+      return cssText.replace(/url\(\s*(['"]?)(.*?)\1\s*\)/gi, (match, quote, raw) => {
+        const trimmed = raw.trim();
+        if (!trimmed || trimmed.startsWith("data:") || trimmed.startsWith("#")) return match;
+        const absolute = new URL(trimmed, base).href;
+        return `url("${rewrittenRoute(absolute, kind)}")`;
+      });
+    }
+
+    function rewriteSrcset(value, base) {
+      return value.split(",").map(part => {
+        const segment = part.trim();
+        if (!segment) return segment;
+        const firstSpace = segment.search(/\s/);
+        const raw = firstSpace === -1 ? segment : segment.slice(0, firstSpace);
+        const descriptor = firstSpace === -1 ? "" : segment.slice(firstSpace);
+        const absolute = new URL(raw, base).href;
+        return `${rewrittenRoute(absolute, "srcset")}${descriptor}`;
+      }).join(", ");
+    }
+
+    function rewriteFixture() {
+      mappings = [];
+      const doc = new DOMParser().parseFromString(FIXTURE_HTML, "text/html");
+
+      const attrs = ["href", "src", "action"];
+      for (const attr of attrs) {
+        for (const el of doc.querySelectorAll(`[${attr}]`)) {
+          const raw = el.getAttribute(attr);
+          if (!raw) continue;
+          const absolute = new URL(raw, PAGE_URL).href;
+          el.setAttribute(attr, rewrittenRoute(absolute, attr));
+        }
+      }
+
+      for (const el of doc.querySelectorAll("[srcset]")) {
+        el.setAttribute("srcset", rewriteSrcset(el.getAttribute("srcset"), PAGE_URL));
+      }
+
+      for (const style of doc.querySelectorAll("style")) {
+        style.textContent = rewriteCssUrls(style.textContent, PAGE_URL, "css-url");
+      }
+
+      for (const el of doc.querySelectorAll("[style]")) {
+        el.setAttribute("style", rewriteCssUrls(el.getAttribute("style"), PAGE_URL, "style-url"));
+      }
+
+      const rewritten = `<!doctype html>\n${doc.documentElement.outerHTML}`;
+      document.getElementById("fixture-after").value = rewritten;
+      document.getElementById("mapping-count").textContent = String(mappings.length);
+
+      statuses.hrefsrc = mappings.some(m => ["href", "src", "srcset"].includes(m.kind)) ? "PASS" : "FAIL";
+      statuses.cssrewrite = mappings.some(m => ["css-url", "style-url"].includes(m.kind)) ? "PASS" : "FAIL";
+      statuses.action = mappings.some(m => m.kind === "action") ? "PASS" : "FAIL";
+
+      renderMappings();
+      updateReport();
+      log(`REWRITER: mappings=${mappings.length}; no se ejecutó HTML transformado.`);
+      return mappings.length;
+    }
+
+    function renderMappings() {
+      const body = document.getElementById("mapping-body");
+      body.innerHTML = "";
+      if (!mappings.length) {
+        body.innerHTML = '<tr><td colspan="4">Sin mappings.</td></tr>';
+        return;
+      }
+
+      mappings.forEach((m, index) => {
+        const row = document.createElement("tr");
+        [String(index + 1), m.kind, m.absolute, m.route].forEach(value => {
+          const td = document.createElement("td");
+          td.textContent = value;
+          td.classList.add("mono");
+          row.appendChild(td);
+        });
+        body.appendChild(row);
+      });
+    }
+
+    async function runAll() {
+      resetLab(false);
+      log("RUN ALL: iniciando Fase 7B.");
+
+      await testDocument();
+      await testImage();
+      await testStylesheet();
+      await testCssomRead();
+      await testFetch();
+      const count = rewriteFixture();
+
+      const coreOk = statuses.document === "PASS" && statuses.dom === "PASS" && statuses.image === "PASS" && count >= 5;
+      document.getElementById("result").textContent = coreOk
+        ? "OK: reporte de compatibilidad generado"
+        : "Completado con diferencias; revisar reporte";
+
+      log(`RESULT: ${JSON.stringify(statuses)}; mappings=${count}; externalRequests=${externalRequests}.`);
+    }
+
+    function resetLab(clearLog = true) {
+      const frame = document.getElementById("wiki-frame");
+      frame.removeAttribute("src");
+      frame.onload = null;
+      document.getElementById("logo-preview").removeAttribute("src");
+      if (stylesheetLink) stylesheetLink.remove();
+      stylesheetLink = null;
+
+      externalRequests = 0;
+      mappings = [];
+      statuses = {
+        document: "PENDING",
+        dom: "PENDING",
+        image: "PENDING",
+        css: "PENDING",
+        cssom: "PENDING",
+        fetch: "PENDING",
+        hrefsrc: "PENDING",
+        cssrewrite: "PENDING",
+        action: "PENDING",
+        runtime: "N/A"
+      };
+
+      document.getElementById("doc-status").textContent = "No probado";
+      document.getElementById("img-status").textContent = "No probado";
+      document.getElementById("css-status").textContent = "No probado";
+      document.getElementById("cssom-status").textContent = "No probado";
+      document.getElementById("fetch-status").textContent = "No probado";
+      document.getElementById("mapping-count").textContent = "0";
+      document.getElementById("request-count").textContent = "0";
+      document.getElementById("result").textContent = "No probado";
+      document.getElementById("fixture-before").value = FIXTURE_HTML;
+      document.getElementById("fixture-after").value = "Sin reescribir.";
+      renderMappings();
+      updateReport();
+
+      if (clearLog) {
+        document.getElementById("log").textContent = "";
+        log("Fase 7B lista. Aún no se ha hecho ningún request externo.");
+      }
+    }
+
+    resetLab();
+  </script>
+</body>
+</html>
