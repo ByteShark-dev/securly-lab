@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fase 5A - URL Rewriting</title>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 1100px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.5;
+        }
+        h1, h2, h3 { margin-bottom: 10px; }
+        .note {
+            background: #f6f6f6;
+            padding: 12px;
+            border-left: 4px solid #999999;
+            margin: 15px 0;
+        }
+        .panel {
+            border: 1px solid #cccccc;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        button, a.button {
+            display: inline-block;
+            margin: 5px 5px 5px 0;
+            padding: 10px 16px;
+            border: 1px solid #999999;
+            border-radius: 4px;
+            background: #ffffff;
+            color: #111111;
+            text-decoration: none;
+            cursor: pointer;
+            font: inherit;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+            gap: 14px;
+        }
+        textarea, pre, .mono-box {
+            font-family: monospace;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+        textarea {
+            width: 100%;
+            min-height: 320px;
+            box-sizing: border-box;
+            resize: vertical;
+            padding: 12px;
+        }
+        pre, .mono-box {
+            background: #f7f7f7;
+            border-radius: 6px;
+            padding: 12px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0 25px;
+        }
+        th, td {
+            border: 1px solid #cccccc;
+            padding: 9px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th { background: #f4f4f4; }
+        code, .mono { font-family: monospace; word-break: break-all; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+            gap: 10px;
+            margin: 15px 0;
+        }
+        .stat {
+            background: #f4f4f4;
+            border-radius: 8px;
+            padding: 12px;
+        }
+        .stat strong { display: block; margin-bottom: 5px; }
+        #log {
+            min-height: 230px;
+            background: #111111;
+            color: #eeeeee;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+    </style>
+</head>
+<body>
+    <h1>Fase 5A — URL rewriting sin red externa</h1>
+
+    <p>
+        Esta fase muestra cómo una capa tipo Scramjet puede separar la URL que una
+        página cree estar usando de la URL que termina viendo el navegador. Todo se
+        hace localmente: <code>demo.invalid</code> es un dominio reservado de ejemplo
+        y ninguna de las URLs transformadas se ejecuta contra ese destino.
+    </p>
+
+    <a class="button" href="./phase4f.html">← Volver a Fase 4F</a>
+    <a class="button" href="./">Laboratorio principal</a>
+
+    <div class="note">
+        Este laboratorio NO es un proxy. No recupera contenido remoto, no abre sockets
+        hacia los destinos del HTML y no permite elegir destinos arbitrarios. Solo
+        transforma strings y simula la decisión que tomaría el navegador.
+    </div>
+
+    <h2>Modelo</h2>
+    <pre>Página original
+    │
+    │  src="../img/logo.png"
+    ▼
+resolver contra https://demo.invalid/app/index.html
+    │
+    │  https://demo.invalid/img/logo.png
+    ▼
+reescritor del laboratorio
+    │
+    │  /securly-lab/__lab_route__/aHR0cHM6Ly9kZW1vLmludmFsaWQv...
+    ▼
+URL que vería el navegador
+    │
+    └── byteshark-dev.github.io  (mismo origen del laboratorio)</pre>
+
+    <div class="panel">
+        <h2>Control</h2>
+        <button onclick="rewriteDocument()">1. Reescribir documento</button>
+        <button onclick="simulateBrowserRequests()">2. Simular requests</button>
+        <button onclick="simulateFetchCall()">3. Simular fetch()</button>
+        <button onclick="resetLab()">Reiniciar</button>
+    </div>
+
+    <div class="stats">
+        <div class="stat"><strong>URLs encontradas</strong><span id="found-count" class="mono">0</span></div>
+        <div class="stat"><strong>URLs reescritas</strong><span id="rewritten-count" class="mono">0</span></div>
+        <div class="stat"><strong>Requests reales externos</strong><span class="mono">0</span></div>
+        <div class="stat"><strong>Estado</strong><span id="status" class="mono">Sin ejecutar</span></div>
+    </div>
+
+    <div class="grid">
+        <section>
+            <h2>HTML original</h2>
+            <textarea id="source" spellcheck="false"></textarea>
+        </section>
+        <section>
+            <h2>HTML transformado</h2>
+            <textarea id="output" spellcheck="false" readonly></textarea>
+        </section>
+    </div>
+
+    <h2>Mapa de reescritura</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Contexto</th>
+                <th>Original</th>
+                <th>URL resuelta</th>
+                <th>URL visible al navegador</th>
+            </tr>
+        </thead>
+        <tbody id="map-body">
+            <tr><td colspan="5">Aún no se ha ejecutado el reescritor.</td></tr>
+        </tbody>
+    </table>
+
+    <h2>Por qué <code>fetch()</code> es diferente</h2>
+    <div class="mono-box" id="fetch-explanation">El HTML contiene: fetch("/api/profile")
+
+Un parser de atributos no ve esa URL porque está dentro de JavaScript.
+En esta fase la simularemos con una función labFetch() que RESUELVE y REESCRIBE la URL,
+pero deliberadamente NO ejecuta fetch() real.</div>
+
+    <h2>Log</h2>
+    <div id="log"></div>
+
+    <script>
+        const DOCUMENT_URL = "https://demo.invalid/app/index.html";
+        const LAB_ROUTE_PREFIX = `${location.origin}/securly-lab/__lab_route__/`;
+
+        const DEFAULT_HTML = `<!doctype html>
+<html>
+<head>
+  <link rel="stylesheet" href="./css/site.css">
+  <style>
+    .hero { background-image: url('../img/hero.png'); }
+  </style>
+</head>
+<body>
+  <a href="./about.html">Acerca de</a>
+  <img src="../img/logo.png" alt="Logo">
+  <img srcset="../img/small.png 1x, ../img/large.png 2x" alt="Responsive">
+  <form action="/search">
+    <input name="q">
+  </form>
+  <video poster="/media/poster.jpg"></video>
+  <script>
+    fetch("/api/profile");
+  <\/script>
+</body>
+</html>`;
+
+        let mappings = [];
+        let transformedHtml = "";
+
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            document.getElementById("log").textContent += `[${time}] ${message}\n`;
+        }
+
+        function bytesToBase64Url(text) {
+            const bytes = new TextEncoder().encode(text);
+            let binary = "";
+            for (const byte of bytes) binary += String.fromCharCode(byte);
+            return btoa(binary)
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+        }
+
+        function resolveUrl(raw) {
+            return new URL(raw, DOCUMENT_URL).href;
+        }
+
+        function makeLabRoute(absoluteUrl) {
+            return LAB_ROUTE_PREFIX + bytesToBase64Url(absoluteUrl);
+        }
+
+        function recordMapping(context, raw) {
+            const absolute = resolveUrl(raw);
+            const rewritten = makeLabRoute(absolute);
+            mappings.push({ context, raw, absolute, rewritten });
+            return rewritten;
+        }
+
+        function rewriteSrcset(value) {
+            return value
+                .split(",")
+                .map(part => {
+                    const trimmed = part.trim();
+                    const firstSpace = trimmed.search(/\s/);
+                    const rawUrl = firstSpace === -1 ? trimmed : trimmed.slice(0, firstSpace);
+                    const descriptor = firstSpace === -1 ? "" : trimmed.slice(firstSpace);
+                    return recordMapping("srcset", rawUrl) + descriptor;
+                })
+                .join(", ");
+        }
+
+        function rewriteCssUrls(cssText) {
+            return cssText.replace(/url\(\s*(['"]?)([^'"\)]+)\1\s*\)/gi, (match, quote, raw) => {
+                const clean = raw.trim();
+                if (clean.startsWith("data:") || clean.startsWith("#")) return match;
+                const rewritten = recordMapping("CSS url()", clean);
+                return `url("${rewritten}")`;
+            });
+        }
+
+        function rewriteDocument() {
+            mappings = [];
+            const source = document.getElementById("source").value;
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(source, "text/html");
+
+            const attributes = ["href", "src", "action", "poster"];
+
+            for (const element of doc.querySelectorAll("*")) {
+                for (const attr of attributes) {
+                    if (!element.hasAttribute(attr)) continue;
+                    const raw = element.getAttribute(attr);
+                    if (!raw || raw.startsWith("data:") || raw.startsWith("#") || raw.startsWith("javascript:")) continue;
+                    element.setAttribute(attr, recordMapping(`${element.tagName.toLowerCase()}[${attr}]`, raw));
+                }
+
+                if (element.hasAttribute("srcset")) {
+                    element.setAttribute("srcset", rewriteSrcset(element.getAttribute("srcset")));
+                }
+
+                if (element.hasAttribute("style")) {
+                    element.setAttribute("style", rewriteCssUrls(element.getAttribute("style")));
+                }
+            }
+
+            for (const style of doc.querySelectorAll("style")) {
+                style.textContent = rewriteCssUrls(style.textContent);
+            }
+
+            // IMPORTANTE: no ejecutamos ni transformamos el script aquí.
+            // Eso permite observar que las URLs dentro de JavaScript requieren
+            // instrumentación adicional a la simple reescritura de HTML/CSS.
+            transformedHtml = "<!doctype html>\n" + doc.documentElement.outerHTML;
+            document.getElementById("output").value = transformedHtml;
+            renderMappings();
+
+            document.getElementById("found-count").textContent = String(mappings.length);
+            document.getElementById("rewritten-count").textContent = String(mappings.length);
+            document.getElementById("status").textContent = "Documento reescrito";
+
+            log(`REWRITE: ${mappings.length} referencias transformadas.`);
+            log("REWRITE: ningún recurso fue solicitado a la red.");
+        }
+
+        function renderMappings() {
+            const body = document.getElementById("map-body");
+            body.innerHTML = "";
+
+            if (mappings.length === 0) {
+                body.innerHTML = '<tr><td colspan="5">Sin referencias.</td></tr>';
+                return;
+            }
+
+            mappings.forEach((mapping, index) => {
+                const row = document.createElement("tr");
+                for (const value of [
+                    String(index + 1),
+                    mapping.context,
+                    mapping.raw,
+                    mapping.absolute,
+                    mapping.rewritten
+                ]) {
+                    const cell = document.createElement("td");
+                    cell.textContent = value;
+                    if (index >= 0) cell.classList.add("mono");
+                    row.appendChild(cell);
+                }
+                body.appendChild(row);
+            });
+        }
+
+        function simulateBrowserRequests() {
+            if (mappings.length === 0) rewriteDocument();
+
+            log("SIMULACIÓN: el navegador recibiría las URLs YA reescritas:");
+            for (const mapping of mappings) {
+                const visibleHost = new URL(mapping.rewritten).host;
+                log(`BROWSER → ${visibleHost}${new URL(mapping.rewritten).pathname}`);
+            }
+            log("SIMULACIÓN: no se llamó fetch(), no se cargó iframe y no se insertó el HTML transformado en el DOM.");
+            document.getElementById("status").textContent = "Requests simulados";
+        }
+
+        function labFetch(rawUrl) {
+            const absolute = resolveUrl(rawUrl);
+            const rewritten = makeLabRoute(absolute);
+
+            log(`JS original: fetch(${JSON.stringify(rawUrl)})`);
+            log(`JS resuelve: ${absolute}`);
+            log(`labFetch reescribe: ${rewritten}`);
+            log("labFetch: STOP — la fase 5A no ejecuta una petición de red.");
+
+            document.getElementById("fetch-explanation").textContent =
+`Código de la página:
+fetch("${rawUrl}")
+
+URL que resolvería la página:
+${absolute}
+
+URL que produciría nuestra capa de instrumentación:
+${rewritten}
+
+Request real ejecutado: NO`;
+        }
+
+        function simulateFetchCall() {
+            labFetch("/api/profile");
+            document.getElementById("status").textContent = "fetch() instrumentado (simulado)";
+        }
+
+        function resetLab() {
+            mappings = [];
+            transformedHtml = "";
+            document.getElementById("source").value = DEFAULT_HTML;
+            document.getElementById("output").value = "";
+            document.getElementById("found-count").textContent = "0";
+            document.getElementById("rewritten-count").textContent = "0";
+            document.getElementById("status").textContent = "Sin ejecutar";
+            document.getElementById("map-body").innerHTML = '<tr><td colspan="5">Aún no se ha ejecutado el reescritor.</td></tr>';
+            document.getElementById("fetch-explanation").textContent =
+`El HTML contiene: fetch("/api/profile")
+
+Un parser de atributos no ve esa URL porque está dentro de JavaScript.
+En esta fase la simularemos con una función labFetch() que RESUELVE y REESCRIBE la URL,
+pero deliberadamente NO ejecuta fetch() real.`;
+            document.getElementById("log").textContent = "";
+            log("Fase 5A lista. Ningún recurso externo ha sido solicitado.");
+        }
+
+        resetLab();
+    </script>
+</body>
+</html>
